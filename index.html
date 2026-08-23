@@ -5262,6 +5262,7 @@ document.getElementById('online-back-btn').addEventListener('click', () => {
             const d = JSON.parse(e.data);
             if (d.type === 'login_result' && d.ok) {
               authWs.close();
+              if (d.stats) syncServerStats(d.stats);
               showScreen('setup');
             }
           } catch(ex) {}
@@ -5365,6 +5366,7 @@ document.getElementById('online-back-btn').addEventListener('click', () => {
             if (d.ok) {
               localStorage.setItem('spy_player_name', d.nickname);
               localStorage.setItem('shpion_pass', pass);
+              if (d.stats) syncServerStats(d.stats);
               showScreen('setup');
             } else {
               errEl.textContent = d.error || 'Ошибка входа';
@@ -5400,6 +5402,30 @@ function loadStats() {
   try { return JSON.parse(localStorage.getItem(STATS_KEY)) || { games:0, wins:0, losses:0, spyGames:0, spyWins:0, spyCaught:0, civCaught:0, rating:0 }; } catch(e) { return { games:0, wins:0, losses:0, spyGames:0, spyWins:0, spyCaught:0, civCaught:0, rating:0 }; }
 }
 function saveStats(s) { try { localStorage.setItem(STATS_KEY, JSON.stringify(s)); } catch(e) {} }
+
+function syncServerStats(serverStats) {
+  if (!serverStats) return;
+  const local = loadStats();
+  const merged = Object.assign({}, local, serverStats);
+  saveStats(merged);
+  localStorage.setItem('shpion_frame', serverStats.frame || localStorage.getItem('shpion_frame') || 'default');
+  try {
+    const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const sws = new WebSocket(wsUrl);
+    sws.onopen = () => sws.send(JSON.stringify({ type: 'get_achievements', nickname: serverStats.nickname || localStorage.getItem('spy_player_name') }));
+    sws.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.type === 'achievements_data') {
+          localStorage.setItem('shpion_frame', d.frame || 'default');
+          localStorage.setItem('shpion_ach_count', (d.achievements || []).length);
+        }
+        sws.close();
+      } catch(ex) {}
+    };
+    setTimeout(() => { try { sws.close(); } catch(x) {} }, 8000);
+  } catch(ex) {}
+}
 
 const RANKS = [
   { min:0,    title:'Бронза I',         color:'#cd7f32' },
