@@ -778,6 +778,25 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
 .profile-frames-section{width:100%;margin-top:8px}
 .frame-hint{font-size:0.72em;color:rgba(255,255,255,.3);text-align:center;padding:4px 14px}
 
+/* Admin Panel */
+.admin-list{flex:1;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+.admin-player{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06)}
+.admin-player.banned{border-color:rgba(255,51,102,.4);background:rgba(255,51,102,.06)}
+.admin-player .ap-info{flex:1;text-align:left}
+.admin-player .ap-nick{font-size:0.9em;font-weight:700;color:var(--text)}
+.admin-player .ap-stats{font-size:0.7em;color:rgba(255,255,255,.4)}
+.admin-player .ap-badge{font-size:0.65em;padding:2px 6px;border-radius:6px;font-weight:700}
+.ap-badge.on{background:#00ff88;color:#041;color:rgba(0,20,10,1)}
+.ap-badge.off{color:rgba(255,255,255,.3)}
+.ap-badge.ban{background:rgba(255,51,102,.25);color:#ff6677}
+.admin-btn{padding:5px 9px;border-radius:8px;font-size:0.72em;border:none;cursor:pointer;font-weight:700}
+.ab-ban{background:rgba(255,51,102,.15);color:#ff6677}
+.ab-unban{background:rgba(0,255,136,.15);color:#00ff88}
+.ab-kick{background:rgba(255,204,0,.12);color:#ffcc00}
+.admin-actions-row{display:flex;gap:8px;padding:6px 12px}
+.admin-stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px 12px}
+.admin-stats-grid input{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:var(--text);font-size:0.85em;width:100%;box-sizing:border-box}
+
 /* AI Assistant */
 .ai-fab{position:fixed;bottom:20px;right:20px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#667eea,#764ba2);border:2px solid rgba(102,126,234,.5);color:#fff;font-size:1.6em;cursor:pointer;z-index:999;box-shadow:0 4px 20px rgba(102,126,234,.4);display:flex;align-items:center;justify-content:center;transition:transform .2s}
 .ai-fab:active{transform:scale(.9)}
@@ -998,7 +1017,35 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
     </div>
 
     <button class="btn btn-lg fade-in fade-in-d3" id="ach-open-btn" style="background:linear-gradient(135deg,rgba(255,215,0,.15),rgba(255,107,53,.15));border:1px solid rgba(255,215,0,.3);color:#ffd700;width:100%;margin-bottom:8px">🏅 Достижения и рамки</button>
+    <button class="btn btn-lg fade-in fade-in-d35" id="admin-open-btn" style="display:none;background:linear-gradient(135deg,rgba(196,77,255,.18),rgba(122,47,255,.18));border:1px solid rgba(196,77,255,.4);color:#c44dff;width:100%;margin-bottom:8px">⚙️ Админ-панель</button>
     <button class="btn btn-lg fade-in fade-in-d4" id="profile-back-btn" style="background:rgba(var(--neon-rgb),.1);border-color:rgba(var(--neon-rgb),.25);color:var(--text);width:100%" data-i18n="names.back">← Назад</button>
+  </div>
+
+  <!-- Admin Panel -->
+  <div class="chat-wrap" id="admin-wrap">
+    <div class="chat-header">
+      <h3>⚙️ Админ-панель</h3>
+      <button class="chat-close" id="admin-close-btn">✕</button>
+    </div>
+    <div class="chat-body">
+      <div class="admin-list" id="admin-list"></div>
+      <div class="admin-actions-row">
+        <input class="chat-add-input" id="admin-nick-input" placeholder="Ник игрока..." autocomplete="off">
+        <button class="chat-add-btn" id="admin-maxout-btn" style="background:rgba(196,77,255,.2);color:#c44dff;border-color:rgba(196,77,255,.4)">⚡ Макс</button>
+      </div>
+      <div class="admin-actions-row">
+        <input class="chat-add-input" id="admin-edit-nick" placeholder="Ник для статов..." autocomplete="off">
+      </div>
+      <div class="admin-stats-grid">
+        <input type="number" id="as-games" placeholder="Игры" min="0">
+        <input type="number" id="as-wins" placeholder="Победы" min="0">
+        <input type="number" id="as-rating" placeholder="Рейтинг" min="0" max="99999">
+        <input type="number" id="as-spyg" placeholder="Шпион игр" min="0">
+        <input type="number" id="as-spyw" placeholder="Шпион побед" min="0">
+        <input type="number" id="as-losses" placeholder="Поражения" min="0">
+      </div>
+      <button class="btn btn-lg" id="admin-setstats-btn" style="width:calc(100% - 24px);margin:6px 12px;background:rgba(var(--neon-rgb),.12);border-color:var(--neon);color:var(--neon)">💾 Применить статы</button>
+    </div>
   </div>
 
   <!-- Name Input -->
@@ -6276,6 +6323,119 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
   window.getProfileFrameName = function(frameId) {
     return (FRAME_DATA[frameId] || FRAME_DATA.default).name;
   };
+})();
+</script>
+<script>
+// === ADMIN PANEL ===
+(function(){
+  const ADMIN_NICKS = ['geratavrikov'];
+  let adminWs = null;
+  let myNick = (localStorage.getItem('spy_player_name') || '').toLowerCase();
+
+  function isAdmin() { return ADMIN_NICKS.includes(myNick); }
+
+  if (isAdmin()) {
+    const btn = document.getElementById('admin-open-btn');
+    if (btn) btn.style.display = 'block';
+  }
+
+  function aConnect() {
+    try {
+      adminWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+      adminWs.onopen = () => adminWs.send(JSON.stringify({ type: 'get_admin_data' }));
+      adminWs.onmessage = e => {
+        const d = JSON.parse(e.data);
+        if (d.type === 'admin_data') renderAdminList(d);
+        if (d.type === 'toast') showToast(d.text);
+      };
+    } catch(e) {}
+  }
+
+  function showToast(text) {
+    let t = document.getElementById('adm-toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'adm-toast';
+      t.style.cssText = 'position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:#1a1a2e;border:1px solid rgba(196,77,255,.5);color:#fff;padding:10px 20px;border-radius:12px;z-index:2000;font-size:.9em;transition:opacity .3s;box-shadow:0 4px 20px rgba(0,0,0,.5)';
+      document.body.appendChild(t);
+    }
+    t.textContent = text;
+    t.style.opacity = '1';
+    setTimeout(() => { t.style.opacity = '0'; }, 2500);
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function renderAdminList(d) {
+    const list = document.getElementById('admin-list');
+    if (!list) return;
+    const onlineSet = new Set(d.online || []);
+    list.innerHTML = '';
+    if (!d.players.length) {
+      list.innerHTML = '<div style="text-align:center;padding:30px;color:rgba(255,255,255,.3);font-size:.85em">Нет аккаунтов</div>';
+      return;
+    }
+    d.players.sort((a, b) => (b.stats.rating||0) - (a.stats.rating||0));
+    d.players.forEach(p => {
+      const el = document.createElement('div');
+      el.className = 'admin-player' + (p.banned ? ' banned' : '');
+      const isOn = onlineSet.has(p.nickname);
+      el.innerHTML =
+        '<div class="ap-info"><div class="ap-nick">' + esc(p.nickname) + '</div>' +
+        '<div class="ap-stats">🎮' + (p.stats.games||0) + ' 🏆' + (p.stats.wins||0) + ' 📈' + (p.stats.rating||0) + ' 🏅' + p.achCount + '/29</div></div>' +
+        '<span class="ap-badge ' + (isOn ? 'on' : 'off') + '">' + (isOn ? '● онлайн' : '○ оффлайн') + '</span>' +
+        (p.banned ? '<button class="admin-btn ab-unban" data-act="unban" data-nick="' + esc(p.nickname) + '">✅ Разбан</button>' :
+                    '<button class="admin-btn ab-ban" data-act="ban" data-nick="' + esc(p.nickname) + '">🚫 Бан</button>') +
+        '<button class="admin-btn ab-kick" data-act="kick" data-nick="' + esc(p.nickname) + '">👢 Кик</button>';
+      list.appendChild(el);
+    });
+    list.querySelectorAll('.admin-btn').forEach(b => {
+      b.onclick = () => {
+        const act = b.dataset.act, nick = b.dataset.nick;
+        if (act === 'ban' && !confirm('Забанить ' + nick + '?')) return;
+        adminWs.send(JSON.stringify({ type: 'admin_' + act, target: nick }));
+        setTimeout(() => { if (adminWs.readyState === 1) adminWs.send(JSON.stringify({type:'get_admin_data'})); }, 500);
+      };
+    });
+  }
+
+  document.getElementById('admin-open-btn').addEventListener('click', () => {
+    aConnect();
+    document.getElementById('admin-wrap').classList.add('open');
+  });
+  document.getElementById('admin-close-btn').addEventListener('click', () => {
+    document.getElementById('admin-wrap').classList.remove('open');
+    try { adminWs.close(); } catch(e) {}
+  });
+
+  document.getElementById('admin-maxout-btn').addEventListener('click', () => {
+    const nick = document.getElementById('admin-nick-input').value.trim();
+    if (!nick) return alert('Введи ник');
+    if (adminWs && adminWs.readyState === 1) {
+      adminWs.send(JSON.stringify({ type: 'admin_maxout', target: nick }));
+      document.getElementById('admin-nick-input').value = '';
+    }
+  });
+
+  document.getElementById('admin-setstats-btn').addEventListener('click', () => {
+    const nick = document.getElementById('admin-edit-nick').value.trim();
+    if (!nick) return alert('Введи ник');
+    if (adminWs && adminWs.readyState === 1) {
+      adminWs.send(JSON.stringify({
+        type: 'admin_setstats', target: nick,
+        stats: {
+          games: parseInt(document.getElementById('as-games').value) || 0,
+          wins: parseInt(document.getElementById('as-wins').value) || 0,
+          rating: parseInt(document.getElementById('as-rating').value) || 0,
+          spyGames: parseInt(document.getElementById('as-spyg').value) || 0,
+          spyWins: parseInt(document.getElementById('as-spyw').value) || 0,
+          losses: parseInt(document.getElementById('as-losses').value) || 0
+        }
+      }));
+    }
+  });
+
+  window.admToast = showToast;
 })();
 </script>
 <script>

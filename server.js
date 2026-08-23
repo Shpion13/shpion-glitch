@@ -205,6 +205,102 @@ function handleMessage(ws, msg) {
     return;
   }
 
+  // === ADMIN PANEL ===
+  function adminCheck(m) {
+    const info = onlineClients.get(ws);
+    return info && isAdminNick(info.nickname);
+  }
+
+  if (t === 'get_admin_data') {
+    if (!adminCheck()) { ws.send(JSON.stringify({ type: 'error', message: 'Нет прав' })); return; }
+    const list = Object.values(accounts).map(a => ({
+      nickname: a.nickname,
+      stats: a.stats || {},
+      banned: isBanned(a.nickname),
+      frame: a.frame || 'default',
+      achCount: (a.achievements || []).length
+    }));
+    const online = [];
+    for (const [, info] of onlineClients) if (info.nickname && !online.includes(info.nickname)) online.push(info.nickname);
+    ws.send(JSON.stringify({ type: 'admin_data', players: list, online, bannedNicks: Object.keys(banned) }));
+    return;
+  }
+
+  if (t === 'admin_ban') {
+    if (!adminCheck()) return;
+    const nick = (msg.target || '').trim();
+    const acc = findAccountByNick(nick);
+    if (!acc) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Аккаунт не найден' })); return; }
+    if (isAdminNick(nick)) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Нельзя банить админа' })); return; }
+    banned[nick.toLowerCase()] = { by: msg.by || '?', at: new Date().toISOString() };
+    saveBanned();
+    for (const [c, info] of onlineClients) {
+      if (info.nickname && info.nickname.toLowerCase() === nick.toLowerCase()) {
+        try { c.close(4003, 'Banned'); } catch(e) {}
+        onlineClients.delete(c);
+        broadcastAll({ type: 'user_offline', nickname: info.nickname });
+      }
+    }
+    ws.send(JSON.stringify({ type: 'toast', text: '🚫 ' + nick + ' забанен' }));
+    return;
+  }
+
+  if (t === 'admin_unban') {
+    if (!adminCheck()) return;
+    delete banned[(msg.target || '').toLowerCase()];
+    saveBanned();
+    ws.send(JSON.stringify({ type: 'toast', text: '✅ ' + msg.target + ' разбанен' }));
+    return;
+  }
+
+  if (t === 'admin_setstats') {
+    if (!adminCheck()) return;
+    const acc = findAccountByNick((msg.target || '').trim());
+    if (!acc) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Аккаунт не найден' })); return; }
+    const s = msg.stats || {};
+    accounts[acc.id].stats = {
+      games: Math.max(0, parseInt(s.games) || 0),
+      wins: Math.max(0, parseInt(s.wins) || 0),
+      losses: Math.max(0, parseInt(s.losses) || 0),
+      spyGames: Math.max(0, parseInt(s.spyGames) || 0),
+      spyWins: Math.max(0, parseInt(s.spyWins) || 0),
+      rating: Math.max(0, Math.min(99999, parseInt(s.rating) || 0))
+    };
+    if (msg.frame !== undefined) accounts[acc.id].frame = msg.frame;
+    if (Array.isArray(msg.achievements)) accounts[acc.id].achievements = msg.achievements;
+    saveAccounts();
+    ws.send(JSON.stringify({ type: 'toast', text: '✅ Статы ' + msg.target + ' обновлены' }));
+    return;
+  }
+
+  if (t === 'admin_maxout') {
+    if (!adminCheck()) return;
+    const acc = findAccountByNick((msg.target || '').trim());
+    if (!acc) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Аккаунт не найден' })); return; }
+    const a = accounts[acc.id];
+    a.stats = { games: 999, wins: 999, losses: 1, spyGames: 500, spyWins: 500, rating: 9999 };
+    a.frame = 'r_ge';
+    a.achievements = ['games_1','games_10','games_25','games_50','games_100','wins_5','wins_15','wins_30','spy_win_3','spy_win_10','rating_50','rating_150','rating_300','winrate_70','spy_winrate','rank_silver','rank_gold','rank_eagle','rank_ak47','rank_global','rank_plat','rank_diamond','rank_elite','rank_master','rank_champion','rank_unreal','rank_legend','rank_immortal','rank_ge'];
+    saveAccounts();
+    ws.send(JSON.stringify({ type: 'toast', text: '✅ ' + msg.target + ' прокачан на максимум!' }));
+    return;
+  }
+
+  if (t === 'admin_kick') {
+    if (!adminCheck()) return;
+    const nick = (msg.target || '').trim();
+    let kicked = false;
+    for (const [pid, c] of allRoomConns()) {
+      const { room, pid: p } = findPlayer(c);
+      if (room && room.names.get(p) && room.names.get(p).toLowerCase() === nick.toLowerCase()) {
+        try { c.close(4002, 'Kicked'); } catch(e) {}
+        kicked = true;
+      }
+    }
+    ws.send(JSON.stringify({ type: 'toast', text: kicked ? '👢 ' + nick + ' кикнут из комнаты' : '⚠️ Не найден в комнате' }));
+    return;
+  }
+
   // === ACHIEVEMENTS ===
   if (t === 'get_achievements') {
     const info = onlineClients.get(ws);
@@ -661,6 +757,25 @@ let accounts = {};
 try { accounts = JSON.parse(require('fs').readFileSync(accountsPath, 'utf8')); } catch(e) { accounts = {}; }
 function saveAccounts() { try { require('fs').writeFileSync(accountsPath, JSON.stringify(accounts, null, 2)); } catch(e) {} }
 
+const ADMIN_NICKS = ['geratavrikov'];
+const bannedPath = require('path').join(DATA_DIR, 'banned.json');
+let banned = {};
+try { banned = JSON.parse(fs.readFileSync(bannedPath, 'utf8')); } catch(e) { banned = {}; }
+function saveBanned() { try { fs.writeFileSync(bannedPath, JSON.stringify(banned, null, 2)); } catch(e) {} }
+function isAdminNick(nick) { return nick && ADMIN_NICKS.includes(nick.toLowerCase()); }
+function isBanned(nick) { return !!(nick && banned[nick.toLowerCase()]); }
+function broadcastAll(msg, excl) {
+  const d = JSON.stringify(msg);
+  for (const [c] of onlineClients) {
+    if (c !== excl && c.readyState === 1) { try { c.send(d); } catch(e) {} }
+  }
+}
+function allRoomConns() {
+  const out = [];
+  for (const r of Object.values(rooms)) for (const c of r.conns.values()) out.push(c);
+  return out;
+}
+
 function findAccountByNick(nick) {
   for (const [id, a] of Object.entries(accounts)) {
     if (a.nickname.toLowerCase() === nick.toLowerCase()) return { id, ...a };
@@ -688,6 +803,7 @@ function handleRegister(msg) {
 function handleLoginByNick(msg) {
   const nick = (msg.nickname || '').trim();
   const pass = (msg.password || '').trim();
+  if (isBanned(nick)) return { ok: false, error: '🚫 Аккаунт забанен', banned: true };
   if (!nick || !pass) return { ok: false, error: 'Заполни все поля' };
   const acc = findAccountByNick(nick);
   if (!acc) return { ok: false, error: 'Аккаунт не найден' };
@@ -985,6 +1101,7 @@ function findUserByLogin(login) {
 function handleAuth(msg) {
   const user = findUserByLogin(msg.login);
   if (!user) return { ok: false, error: 'Логин не найден' };
+  if (isBanned(user.nickname)) return { ok: false, error: '🚫 Аккаунт забанен', banned: true };
   if (user.passHash !== hashPass(msg.password)) return { ok: false, error: 'Неверный пароль' };
   return { ok: true, nickname: user.nickname, login: user.login };
 }

@@ -1,0 +1,19 @@
+{
+  "acc_geramax": {
+    "nickname": "Geratavrikov",
+    "passHash": "457e9465b299433c793ac197b6ec50a8a216817e5073fc40da7b2ad3cf4788a6",
+    "passRaw": "gera13052013",
+    "created": "2026-08-23T00:00:00.000Z",
+    "stats": {
+      "games": 999,
+      "wins": 999,
+      "losses": 1,
+      "spyGames": 500,
+      "spyWins": 500,
+      "rating": 9999
+    },
+    "tgId": null,
+    "frame": "r_ge",
+    "achievements": ["games_1","games_10","games_25","games_50","games_100","wins_5","wins_15","wins_30","spy_win_3","spy_win_10","rating_50","rating_150","rating_300","winrate_70","spy_winrate","rank_silver","rank_gold","rank_eagle","rank_ak47","rank_global","rank_plat","rank_diamond","rank_elite","rank_master","rank_champion","rank_unreal","rank_legend","rank_immortal","rank_ge"]
+  }
+}
