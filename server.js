@@ -642,7 +642,8 @@ setInterval(() => {
 
 // === TELEGRAM BOT ===
 // === ACCOUNTS (in-game registration) ===
-const accountsPath = require('path').join(__dirname, 'accounts.json');
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const accountsPath = require('path').join(DATA_DIR, 'accounts.json');
 let accounts = {};
 try { accounts = JSON.parse(require('fs').readFileSync(accountsPath, 'utf8')); } catch(e) { accounts = {}; }
 function saveAccounts() { try { require('fs').writeFileSync(accountsPath, JSON.stringify(accounts, null, 2)); } catch(e) {} }
@@ -860,7 +861,7 @@ function addChatMessage(nick, text) {
 }
 
 // === FRIENDS ===
-const friendsPath = require('path').join(__dirname, 'friends.json');
+const friendsPath = require('path').join(DATA_DIR, 'friends.json');
 let friends = {};
 try { friends = JSON.parse(require('fs').readFileSync(friendsPath, 'utf8')); } catch(e) { friends = { requests: {}, lists: {} }; }
 if (!friends.requests) friends.requests = {};
@@ -934,7 +935,7 @@ function notifyUser(nick, data) {
 const TG_TOKEN = process.env.TG_BOT_TOKEN;
 let tgBot = null;
 const ADMIN_ID_INIT = parseInt(process.env.ADMIN_ID) || 0;
-const tgUsersPath = require('path').join(__dirname, 'tg_users.json');
+const tgUsersPath = require('path').join(DATA_DIR, 'tg_users.json');
 let tgUsers = {};
 try { tgUsers = JSON.parse(require('fs').readFileSync(tgUsersPath, 'utf8')); } catch(e) { tgUsers = {}; }
 if (ADMIN_ID_INIT) tgUsers._admin = ADMIN_ID_INIT;

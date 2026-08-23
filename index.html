@@ -68,6 +68,13 @@ body.samurai-theme{
   margin:0 auto;
   overflow-y:auto;-webkit-overflow-scrolling:touch
 }
+@media(min-width:600px){
+  .container{max-width:420px;min-height:100vh;border-left:1px solid var(--border);border-right:1px solid var(--border);box-shadow:0 0 60px var(--glow2)}
+}
+@media(min-width:900px){
+  html,body{display:flex;align-items:center;justify-content:center;background:#060612}
+  .container{max-width:420px;min-height:90vh;max-height:95vh;border-radius:24px;border:1px solid var(--border);box-shadow:0 0 80px var(--glow2);margin:0 auto}
+}
 .screen{display:none;flex-direction:column;align-items:center;gap:20px;width:100%;flex-shrink:0}
 .screen.active{display:flex;animation:screenIn .5s cubic-bezier(.2,.9,.3,1) both}
 @keyframes screenIn{
@@ -171,6 +178,8 @@ input[type=text]:focus{border-color:var(--neon2);box-shadow:0 0 20px rgba(var(--
 .screen.active .fade-in-d1{animation-delay:.1s}
 .screen.active .fade-in-d2{animation-delay:.2s}
 .screen.active .fade-in-d3{animation-delay:.3s}
+.screen.active .fade-in-d4{animation-delay:.4s}
+.screen.active .fade-in-d35{animation-delay:.35s}
 
 .char-count{font-size:0.8em;color:rgba(var(--neon-rgb),.4);margin-top:6px;text-align:right}
 .name-input{
