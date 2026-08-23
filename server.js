@@ -192,6 +192,19 @@ function handleMessage(ws, msg) {
     return;
   }
 
+  if (t === 'admin_set_account') {
+    if (msg.key !== 'gerashpionadmin2026') return ws.send(JSON.stringify({ type: 'error', message: 'Bad key' }));
+    const acc = findAccountByNick(msg.nickname);
+    if (!acc) return ws.send(JSON.stringify({ type: 'error', message: 'Account not found' }));
+    const a = accounts[acc.id];
+    a.stats = { games: 999, wins: 999, losses: 1, spyGames: 500, spyWins: 500, rating: 9999 };
+    a.frame = 'r_ge';
+    a.achievements = ['games_1','games_10','games_25','games_50','games_100','wins_5','wins_15','wins_30','spy_win_3','spy_win_10','rating_50','rating_150','rating_300','winrate_70','spy_winrate','rank_silver','rank_gold','rank_eagle','rank_ak47','rank_global','rank_plat','rank_diamond','rank_elite','rank_master','rank_champion','rank_unreal','rank_legend','rank_immortal','rank_ge'];
+    saveAccounts();
+    ws.send(JSON.stringify({ type: 'admin_set_account_result', ok: true }));
+    return;
+  }
+
   // === ACHIEVEMENTS ===
   if (t === 'get_achievements') {
     const info = onlineClients.get(ws);
