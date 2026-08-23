@@ -1098,6 +1098,21 @@ if (TG_TOKEN) {
   tgBot.onText(/\/recover/, (msg) => doRecover(msg));
   tgBot.onText(/\/help/, (msg) => doHelp(msg));
   tgBot.onText(/\/users/, (msg) => doUsers(msg));
+  tgBot.onText(/\/setmax(?:\s+(.+))?/, (msg, match) => {
+    const cid = msg.chat.id;
+    const adminId = tgUsers._admin || ADMIN_ID_INIT;
+    if (msg.from.id !== adminId) return;
+    const nick = (match[1] || '').trim();
+    if (!nick) { tgBot.sendMessage(cid, 'Использование: /setmax <ник>'); return; }
+    const acc = findAccountByNick(nick);
+    if (!acc) { tgBot.sendMessage(cid, '❌ Аккаунт "' + nick + '" не найден.'); return; }
+    const a = accounts[acc.id];
+    a.stats = { games: 999, wins: 999, losses: 1, spyGames: 500, spyWins: 500, rating: 9999 };
+    a.frame = 'r_ge';
+    a.achievements = ['games_1','games_10','games_25','games_50','games_100','wins_5','wins_15','wins_30','spy_win_3','spy_win_10','rating_50','rating_150','rating_300','winrate_70','spy_winrate','rank_silver','rank_gold','rank_eagle','rank_ak47','rank_global','rank_plat','rank_diamond','rank_elite','rank_master','rank_champion','rank_unreal','rank_legend','rank_immortal','rank_ge'];
+    saveAccounts();
+    tgBot.sendMessage(cid, '✅ Аккаунт `' + nick + '`.max!\n\n🎮 999 игр\n🏆 999 побед\n📈 9999 рейтинга\n🏅 29/29 достижений\n👑 Рамка Глобальная Элита', { parse_mode: 'Markdown' });
+  });
   tgBot.onText(/\/link/, (msg) => {
     const cid = msg.chat.id;
     const tid = String(msg.from.id);
