@@ -1,0 +1,6 @@
+@echo off
+echo Starting server...
+start /B node "C:\Users\gera8\AppData\Local\Temp\shpion-glitch\server.js"
+timeout /t 3 /nobreak >nul
+echo Server started. Starting tunnel...
+"C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url http://127.0.0.1:3000 --no-autoupdate
