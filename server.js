@@ -72,6 +72,13 @@ function broadcast(r, msg, excl) {
       try { c.send(d); } catch (e) {}
     }
   }
+  if (r.specs) {
+    for (const [c] of r.specs) {
+      if (c !== excl && c.readyState === 1) {
+        try { c.send(d); } catch (e) {}
+      }
+    }
+  }
 }
 
 function resolveVotes(r) {
@@ -96,12 +103,43 @@ function resolveVotes(r) {
     if (si.includes(mv)) r.civScore++; else r.spyScore++;
     r.game_started = false;
     const p = { votes: arr, mostVoted: mv, spyIndices: si, word: w, players, civScore: r.civScore, spyScore: r.spyScore };
-    if (r.civScore >= 3 || r.spyScore >= 3) {
-      broadcast(r, { type: 'game_over', ...p });
-      finishRatedGame(r);
+    if (r.civScore >= 3) {
+      if (r.spy_guess !== false && r.guess_options && r.guess_options.length) {
+        r.spy_pending = true;
+        r.spy_guess_votes = {};
+        broadcast(r, Object.assign({ type: 'spy_chance', options: shuffle([...r.guess_options]), timeoutMs: 30000 }, p));
+        if (r.spy_timer) clearTimeout(r.spy_timer);
+        r.spy_timer = setTimeout(() => finishWithSpyGuess(r, -1), 30000);
+        return;
+      }
+      r.final_winner = 'civ';
+      broadcast(r, Object.assign({ type: 'game_over', spyGuessed: null }, p));
+      onRoomGameOver(r);
     }
-    else broadcast(r, { type: 'vote_result', ...p, round: r.round });
+    else if (r.spyScore >= 3) {
+      r.final_winner = 'spy';
+      broadcast(r, Object.assign({ type: 'game_over', spyGuessed: null }, p));
+      onRoomGameOver(r);
+    }
+    else broadcast(r, Object.assign({ type: 'vote_result', round: r.round }, p));
   }
+}
+
+function finishWithSpyGuess(r, optIndex) {
+  if (!r.spy_pending) return;
+  r.spy_pending = false;
+  if (r.spy_timer) { clearTimeout(r.spy_timer); r.spy_timer = null; }
+  const opts = r.guess_options || [];
+  const correct = optIndex >= 0 && optIndex < opts.length && String(opts[optIndex]).toLowerCase() === String(r.game_word).toLowerCase();
+  r.final_winner = correct ? 'spy' : 'civ';
+  if (correct) r.spyScore = Math.max(r.spyScore, 3);
+  broadcast(r, { type: 'game_over', votes: [], mostVoted: null, spyIndices: [...r.spy_indices], word: r.game_word, players: plist(r), civScore: r.civScore, spyScore: r.spyScore, spyGuessed: correct ? opts[optIndex] : (optIndex >= 0 ? opts[optIndex] : null), spyGuessCorrect: correct });
+  onRoomGameOver(r);
+}
+
+function onRoomGameOver(r) {
+  try { finishRatedGame(r); } catch (e) {}
+  try { if (r.tourn_match) tournReportMatch(r); } catch (e) {}
 }
 
 function resolveTB(r, tied) {
@@ -128,11 +166,50 @@ function resolveTB(r, tied) {
     if (si.includes(mv)) r.civScore++; else r.spyScore++;
     r.game_started = false;
     const p = { votes: arr, mostVoted: mv, spyIndices: si, word: w, players, civScore: r.civScore, spyScore: r.spyScore };
-    if (r.civScore >= 3 || r.spyScore >= 3) {
-      broadcast(r, { type: 'game_over', ...p });
-      finishRatedGame(r);
+    if (r.civScore >= 3) {
+      if (r.spy_guess !== false && r.guess_options && r.guess_options.length) {
+        r.spy_pending = true;
+        broadcast(r, Object.assign({ type: 'spy_chance', options: shuffle([...r.guess_options]), timeoutMs: 30000 }, p));
+        if (r.spy_timer) clearTimeout(r.spy_timer);
+        r.spy_timer = setTimeout(() => finishWithSpyGuess(r, -1), 30000);
+        return;
+      }
+      r.final_winner = 'civ';
+      broadcast(r, Object.assign({ type: 'game_over', spyGuessed: null }, p));
+      onRoomGameOver(r);
     }
-    else broadcast(r, { type: 'vote_result', ...p, round: r.round });
+    else if (r.spyScore >= 3) {
+      r.final_winner = 'spy';
+      broadcast(r, Object.assign({ type: 'game_over', spyGuessed: null }, p));
+      onRoomGameOver(r);
+    }
+    else broadcast(r, Object.assign({ type: 'vote_result', round: r.round }, p));
+  }
+}
+
+const GRACE_MS = 90000;
+
+function removePlayerFinal(r, pid) {
+  r.players = r.players.filter(p => p !== pid);
+  r.names.delete(pid);
+  r.conns.delete(pid);
+  if (r.afk) r.afk.delete(pid);
+  if (r.grace) { for (const [n, g] of r.grace) if (g.pid === pid) r.grace.delete(n); }
+  if (r.players.length > 0) {
+    if (r.host === pid) {
+      r.host = r.players[0];
+      broadcast(r, { type: 'player_left', players: plist(r), newHost: r.host });
+    } else {
+      broadcast(r, { type: 'player_left', players: plist(r) });
+    }
+  } else {
+    for (const [code, rm] of Object.entries(rooms)) {
+      if (rm === r) {
+        if (rm.spy_timer) clearTimeout(rm.spy_timer);
+        delete rooms[code];
+        break;
+      }
+    }
   }
 }
 
@@ -147,16 +224,38 @@ function handleDisconnect(ws) {
     onlineClients.delete(ws);
   }
   const { room: r, pid } = findPlayer(ws);
-  if (!r || !pid) return;
-  r.players = r.players.filter(p => p !== pid);
-  r.names.delete(pid);
-  r.conns.delete(pid);
-  if (r.players.length > 0) broadcast(r, { type: 'player_left', players: plist(r) });
-  else {
-    for (const [code, rm] of Object.entries(rooms)) {
-      if (rm === r) { delete rooms[code]; break; }
+  if (!r || !pid) {
+    for (const rm of Object.values(rooms)) {
+      if (rm.specs && rm.specs.has(ws)) { rm.specs.delete(ws); broadcast(rm, { type: 'spec_left', specs: [...rm.specs.values()] }); }
     }
+    return;
   }
+  const wasHost = r.host === pid;
+  const inGame = r.game_started || r.spy_pending;
+  r.conns.delete(pid);
+  if (inGame) {
+    if (!r.afk) r.afk = new Set();
+    r.afk.add(pid);
+    if (!r.grace) r.grace = new Map();
+    r.grace.set(String(r.names.get(pid) || '').toLowerCase(), { pid, until: Date.now() + GRACE_MS });
+    broadcast(r, { type: 'player_disconnected', players: plist(r), disconnectedName: r.names.get(pid) || '', reconnectMs: GRACE_MS });
+    if (wasHost && r.players.length > 0) {
+      const alive = r.players.find(p => !r.afk.has(p)) || r.players[0];
+      r.host = alive;
+      broadcast(r, { type: 'host_changed', newHost: r.host });
+    }
+    checkVoteCompletion(r);
+    return;
+  }
+  removePlayerFinal(r, pid);
+}
+
+function checkVoteCompletion(r) {
+  if (!r.game_started || r.spy_pending) return;
+  const pendingVotes = Object.keys(r.votes || {}).length;
+  const waiting = r.players.filter(p => !(r.votes && r.votes[p] !== undefined)).length;
+  const afkWaiting = r.players.filter(p => r.afk && r.afk.has(p) && r.votes[p] === undefined).length;
+  if (waiting - afkWaiting <= 0 && r.players.length > 0 && (pendingVotes + afkWaiting) >= r.players.length && Object.keys(r.votes).length >= Math.max(1, r.players.length - afkWaiting)) resolveVotes(r);
 }
 
 function handleMessage(ws, msg) {
@@ -434,27 +533,48 @@ function handleMessage(ws, msg) {
     const target = (msg.target || '').trim();
     const code = (msg.roomCode || '').trim();
     notifyUser(target, { type: 'friend_invite', from: info.nickname, roomCode: code });
+    tgNotify(target, '📨 ' + info.nickname + ' приглашает тебя в комнату ШПИОН: ' + code + '\nЗаходи: https://shpiongame.ru');
     ws.send(JSON.stringify({ type: 'friend_invite_sent', target }));
     return;
   }
 
-  if (t === 'create_room') {
+if (t === 'create_room') {
     let code = genCode();
     while (rooms[code]) code = genCode();
     const me = crypto.randomUUID();
-    const pw = (msg.password || '').trim();
-    rooms[code] = {
-      players: [me], names: new Map([[me, msg.name]]), conns: new Map([[me, ws]]),
-      ratings: new Map([[me, msg.rating || 0]]),
-      host: me, password: pw, game_started: false, revealed: new Set(),
-      round: 1, civScore: 0, spyScore: 0, banned: new Set(),
-      votes: {}, tb_votes: {}, tied_players: [], tb_round: 0,
-      disc_order: [], disc_idx: 0, game_word: '', game_mode: 'classic', spy_indices: new Set(), rated: false,
-      vote_history: [],
-    };
-    ws._me = me;
-    ws._code = code;
-    ws.send(JSON.stringify({ type: 'room_created', playerId: me, roomCode: code, players: plist(rooms[code]) }));
+    const r = makeRoom(code, me, ws, msg);
+    ws.send(JSON.stringify({ type: 'room_created', playerId: me, roomCode: code, players: plist(r) }));
+  }
+
+  else if (t === 'quick_play') {
+    const joinName = String(msg.name || '').trim();
+    if (isBanned(joinName)) { ws.send(JSON.stringify({ type: 'error', message: '🚫 Аккаунт забанен', banned: true })); return; }
+    const myRating = parseInt(msg.rating, 10) || 0;
+    let candidates = Object.entries(rooms).filter(([, r]) =>
+      r.public && !r.password && !r.game_started && r.players.length > 0 && r.players.length < MAX_PLAYERS &&
+      !(r.bannedNames && r.bannedNames.has(joinName.toLowerCase())) &&
+      [...r.conns.values()].some(c => c.readyState === 1)
+    );
+    if (candidates.length) {
+      candidates.sort((a, b) => {
+        const da = Math.min(...a[1].players.map(p => Math.abs((a[1].ratings.get(p) || 0) - myRating)));
+        const db = Math.min(...b[1].players.map(p => Math.abs((b[1].ratings.get(p) || 0) - myRating)));
+        return da - db || b[1].players.length - a[1].players.length;
+      });
+      const [code, r] = candidates[0];
+      const me = crypto.randomUUID();
+      r.players.push(me); r.names.set(me, msg.name); r.conns.set(me, ws); r.ratings.set(me, myRating);
+      ws._me = me; ws._code = code;
+      ws.send(JSON.stringify({ type: 'quick_found', playerId: me, roomCode: code, players: plist(r) }));
+      broadcast(r, { type: 'player_joined', players: plist(r) }, ws);
+      return;
+    }
+    let code = genCode();
+    while (rooms[code]) code = genCode();
+    const me = crypto.randomUUID();
+    msg.public = true; msg.quick = true; msg.password = '';
+    const r = makeRoom(code, me, ws, msg);
+    ws.send(JSON.stringify({ type: 'quick_found', playerId: me, roomCode: code, players: plist(r), created: true }));
   }
 
   else if (t === 'join_room') {
@@ -465,11 +585,64 @@ function handleMessage(ws, msg) {
     const joinName = String(msg.name || '').trim();
     const isAdminJoin = isAdminNick(joinName.toLowerCase());
     const isFriendJoin = !isAdminJoin && r.players.some(pid => { const n = r.names.get(pid); return n && areFriends(n, joinName); });
-    if (!isAdminJoin && r.game_started) { ws.send(JSON.stringify({ type: 'error', message: 'Игра уже идёт' })); return; }
-    if (!isAdminJoin && r.players.length >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Комната заполнена' })); return; }
-    if (r.password && pw !== r.password && !isFriendJoin && !isAdminJoin) { ws.send(JSON.stringify({ type: 'error', message: 'Неверный пароль' })); return; }
     if (isBanned(joinName)) { ws.send(JSON.stringify({ type: 'error', message: '🚫 Аккаунт забанен', banned: true })); return; }
     if (r.bannedNames && r.bannedNames.has(joinName.toLowerCase())) { ws.send(JSON.stringify({ type: 'error', message: 'Вы были исключены из этой комнаты' })); return; }
+
+    // Spectator mode
+    if (msg.spectate) {
+      const canSpec = isAdminJoin || isFriendJoin;
+      if (!canSpec) { ws.send(JSON.stringify({ type: 'error', message: 'Наблюдать могут только друзья игроков этой комнаты' })); return; }
+      if (!r.specs) r.specs = new Map();
+      r.specs.set(ws, joinName);
+      ws.send(JSON.stringify({ type: 'spectating', roomCode: code, players: plist(r), specs: [...r.specs.values()], round: r.round, civScore: r.civScore, spyScore: r.spyScore, gameStarted: r.game_started }));
+      broadcast(r, { type: 'spec_joined', specs: [...r.specs.values()] }, ws);
+      return;
+    }
+
+    // Reconnect grace: same nickname returns to their seat
+    if (!r.grace) r.grace = new Map();
+    const gkey = joinName.toLowerCase();
+    // Tournament placeholder seat takeover
+    if (r.tourn_placeholders && r.tourn_placeholders.size) {
+      let phPid = null;
+      for (const pid of r.tourn_placeholders) {
+        if (String(r.names.get(pid) || '').toLowerCase() === gkey) { phPid = pid; break; }
+      }
+      if (phPid) {
+        r.tourn_placeholders.delete(phPid);
+        r.conns.set(phPid, ws);
+        ws._me = phPid;
+        ws._code = code;
+        const idx2 = r.players.indexOf(phPid);
+        ws.send(JSON.stringify({ type: 'room_joined', playerId: phPid, roomCode: code, players: plist(r), tourn: true }));
+        broadcast(r, { type: 'player_joined', players: plist(r) }, ws);
+        return;
+      }
+    }
+    if (r.grace.has(gkey)) {
+      const g = r.grace.get(gkey);
+      if (Date.now() < g.until && r.players.includes(g.pid)) {
+        const pid = g.pid;
+        r.grace.delete(gkey);
+        if (r.afk) r.afk.delete(pid);
+        r.conns.set(pid, ws);
+        ws._me = pid;
+        ws._code = code;
+        const idx = r.players.indexOf(pid);
+        ws.send(JSON.stringify({ type: 'room_reconnected', playerId: pid, roomCode: code, players: plist(r), round: r.round, civScore: r.civScore, spyScore: r.spyScore, gameStarted: r.game_started, isHost: r.host === pid }));
+        broadcast(r, { type: 'player_reconnected', players: plist(r), name: joinName }, ws);
+        if (r.game_started && !r.spy_pending) {
+          const isSpy = r.spy_indices.has(idx);
+          ws.send(JSON.stringify({ type: 'your_role', playerIndex: idx, isSpy, word: isSpy && r.game_mode === 'similar' ? r.similar_word : r.game_word, mode: r.game_mode, totalPlayers: r.players.length, round: r.round, civScore: r.civScore, spyScore: r.spyScore, chatMode: r.chat_mode, rated: r.rated, reconnected: true }));
+        }
+        return;
+      }
+      r.grace.delete(gkey);
+    }
+
+    if (!isAdminJoin && r.game_started) { ws.send(JSON.stringify({ type: 'error', message: 'Игра уже идёт', canSpectate: true, roomCode: code })); return; }
+    if (!isAdminJoin && r.players.length >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Комната заполнена', canSpectate: true, roomCode: code })); return; }
+    if (r.password && pw !== r.password && !isFriendJoin && !isAdminJoin) { ws.send(JSON.stringify({ type: 'error', message: 'Неверный пароль' })); return; }
     const me = crypto.randomUUID();
     if (r.banned.has(me)) { ws.send(JSON.stringify({ type: 'error', message: 'Вы заблокированы' })); return; }
     r.players.push(me);
@@ -508,37 +681,11 @@ function handleMessage(ws, msg) {
     const { pid } = findPlayer(ws);
     if (!r || pid !== r.host) return;
     if (r.players.length < 3) { ws.send(JSON.stringify({ type: 'error', message: 'Нужно минимум 3 игрока' })); return; }
-    r.game_started = true;
-    r.revealed = new Set();
-    r.votes = {};
-    r.tb_votes = {};
-    r.tied_players = [];
-    r.disc_order = [];
-    r.disc_idx = 0;
-    r.banned = new Set();
-    const themes = (msg.settings && msg.settings.themes) || ['movies'];
-    const theme = pick(themes);
-    const pool = WORDS[theme] || WORDS.movies;
-    const word = pick(pool);
-    const similar = pool.length > 1 ? pick(pool.filter(w => w !== word)) : word;
-    const mode = (msg.settings && msg.settings.mode) || 'classic';
-    const sc = r.players.length <= 5 ? 1 : 2;
-    const si = new Set(shuffle(r.players.map((_, i) => i)).slice(0, sc));
-    r.game_word = word;
-    r.game_mode = mode;
-    r.chat_mode = (msg.settings && msg.settings.chatMode) || 'voice';
-    r.rated = !!(msg.settings && msg.settings.rated);
-    r.spy_indices = si;
-    broadcast(r, { type: 'game_started', themeEmoji: '❓', themeLabel: theme, chatMode: r.chat_mode, rated: r.rated });
-    for (let i = 0; i < r.players.length; i++) {
-      const p = r.players[i];
-      const c = r.conns.get(p);
-      if (c && c.readyState === 1) {
-        const isSpy = si.has(i);
-        const w = (isSpy && mode === 'similar') ? similar : word;
-        c.send(JSON.stringify({ type: 'your_role', playerIndex: i, isSpy, word: w, mode, totalPlayers: r.players.length, round: r.round, civScore: r.civScore, spyScore: r.spyScore, chatMode: r.chat_mode, rated: r.rated }));
-      }
+    if (msg.settings && Array.isArray(msg.settings.customWords) && msg.settings.customWords.length) {
+      r.custom_words = sanitizeCustomWords(msg.settings.customWords);
     }
+    if (msg.settings && msg.settings.spyGuess !== undefined) r.spy_guess = !!msg.settings.spyGuess;
+    beginRound(r, msg.settings);
   }
 
   else if (t === 'player_revealed') {
@@ -616,7 +763,7 @@ function handleMessage(ws, msg) {
     if (r && pid && r.players.includes(pid) && msg.voteIndex !== undefined) {
       r.votes[pid] = msg.voteIndex;
       ws.send(JSON.stringify({ type: 'vote_ack' }));
-      if (Object.keys(r.votes).length >= r.players.length) resolveVotes(r);
+      checkVoteCompletion(r);
     }
   }
 
@@ -626,7 +773,31 @@ function handleMessage(ws, msg) {
     if (r && pid && r.players.includes(pid) && msg.voteIndex !== undefined) {
       r.tb_votes[pid] = msg.voteIndex;
       ws.send(JSON.stringify({ type: 'vote_ack' }));
-      if (Object.keys(r.tb_votes).length >= r.players.length) resolveTB(r, r.tied_players || []);
+      const waiting = r.players.filter(p => r.tb_votes[p] === undefined).length;
+      const afkWaiting = r.players.filter(p => r.afk && r.afk.has(p) && r.tb_votes[p] === undefined).length;
+      if (waiting - afkWaiting <= 0) resolveTB(r, r.tied_players || []);
+    }
+  }
+
+  else if (t === 'spy_guess') {
+    const r = findRoom(ws);
+    const { pid } = findPlayer(ws);
+    if (!r || !pid || !r.spy_pending) return;
+    const idx = r.players.indexOf(pid);
+    if (!r.spy_indices.has(idx)) return;
+    finishWithSpyGuess(r, parseInt(msg.optionIndex, 10));
+  }
+
+  else if (t === 'emote') {
+    const r = findRoom(ws);
+    const { pid } = findPlayer(ws);
+    const ALLOWED = ['😱','🤔','😂','🔥','👍','❤️','😮','😈'];
+    if (r && pid && ALLOWED.includes(msg.emoji)) {
+      const now = Date.now();
+      if (!r.emote_ts) r.emote_ts = {};
+      if (now - (r.emote_ts[pid] || 0) < 1200) return;
+      r.emote_ts[pid] = now;
+      broadcast(r, { type: 'emote', playerId: pid, emoji: msg.emoji });
     }
   }
 
@@ -634,32 +805,8 @@ function handleMessage(ws, msg) {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);
     if (r && pid === r.host) {
-      r.game_started = true;
-      r.revealed = new Set();
-      r.votes = {};
-      r.tb_votes = {};
-      r.tied_players = [];
-      r.disc_order = [];
-      r.disc_idx = 0;
       r.round++;
-      const theme = pick(Object.keys(WORDS));
-      const pool = WORDS[theme];
-      const word = pick(pool);
-      const similar = pool.length > 1 ? pick(pool.filter(w => w !== word)) : word;
-      const sc = r.players.length <= 5 ? 1 : 2;
-      const si = new Set(shuffle(r.players.map((_, i) => i)).slice(0, sc));
-      r.game_word = word;
-      r.spy_indices = si;
-      broadcast(r, { type: 'game_started', themeEmoji: '🔄', themeLabel: 'Раунд ' + r.round, chatMode: r.chat_mode });
-      for (let i = 0; i < r.players.length; i++) {
-        const p = r.players[i];
-        const c = r.conns.get(p);
-        if (c && c.readyState === 1) {
-          const isSpy = si.has(i);
-          const w = (isSpy && r.game_mode === 'similar') ? similar : word;
-          c.send(JSON.stringify({ type: 'your_role', playerIndex: i, isSpy, word: w, mode: r.game_mode, totalPlayers: r.players.length, round: r.round, civScore: r.civScore, spyScore: r.spyScore, chatMode: r.chat_mode, rated: r.rated }));
-        }
-      }
+      beginRound(r, { mode: r.game_mode, chatMode: r.chat_mode, rated: r.rated });
     }
   }
 
@@ -679,15 +826,20 @@ function handleMessage(ws, msg) {
       r.tied_players = [];
       r.tb_votes = {};
       r.banned = new Set();
+      r.afk = new Set();
+      if (r.grace) r.grace.clear();
+      if (r.spy_timer) { clearTimeout(r.spy_timer); r.spy_timer = null; }
+      r.spy_pending = false;
+      r.final_winner = null;
       r.vote_history = [];
       broadcast(r, { type: 'game_restarted', players: plist(r) });
     }
   }
 
   else if (t === 'random_join') {
-    const pw = (msg.password || '').trim();
     const candidates = Object.entries(rooms).filter(([, r]) =>
-      !r.game_started && r.players.length < MAX_PLAYERS && !r.password
+      !r.game_started && r.players.length < MAX_PLAYERS && !r.password &&
+      [...r.conns.values()].some(c => c.readyState === 1)
     );
     if (candidates.length > 0) {
       const [code, r] = candidates[Math.floor(Math.random() * candidates.length)];
@@ -704,18 +856,9 @@ function handleMessage(ws, msg) {
       let code = genCode();
       while (rooms[code]) code = genCode();
       const me = crypto.randomUUID();
-      rooms[code] = {
-        players: [me], names: new Map([[me, msg.name]]), conns: new Map([[me, ws]]),
-        ratings: new Map([[me, msg.rating || 0]]),
-        host: me, password: '', game_started: false, revealed: new Set(),
-        round: 1, civScore: 0, spyScore: 0, banned: new Set(),
-        votes: {}, tb_votes: {}, tied_players: [], tb_round: 0,
-        disc_order: [], disc_idx: 0, game_word: '', game_mode: 'classic', spy_indices: new Set(), rated: false,
-        vote_history: [],
-      };
-      ws._me = me;
-      ws._code = code;
-      ws.send(JSON.stringify({ type: 'room_created', playerId: me, roomCode: code, players: plist(rooms[code]) }));
+      msg.public = true; msg.password = '';
+      const r = makeRoom(code, me, ws, msg);
+      ws.send(JSON.stringify({ type: 'room_created', playerId: me, roomCode: code, players: plist(r) }));
     }
   }
 
@@ -740,18 +883,193 @@ function handleMessage(ws, msg) {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);
     if (r && pid) {
-      r.players = r.players.filter(p => p !== pid);
-      r.names.delete(pid);
-      r.conns.delete(pid);
-      if (r.players.length > 0) broadcast(r, { type: 'player_left', players: plist(r) });
-      else {
-        for (const [code, rm] of Object.entries(rooms)) {
-          if (rm === r) { delete rooms[code]; break; }
+      removePlayerFinal(r, pid);
+    } else {
+      for (const rm of Object.values(rooms)) {
+        if (rm.specs && rm.specs.has(ws)) {
+          rm.specs.delete(ws);
+          broadcast(rm, { type: 'spec_left', specs: [...rm.specs.values()] });
+          break;
         }
       }
     }
   }
+
+  // === WEEKLY TOP ===
+  else if (t === 'get_weekly_top') {
+    const wk = isoWeekKey();
+    const rows = Object.values(accounts)
+      .filter(a => a.weekly && a.weekly.week === wk && a.weekly.rating > 0)
+      .sort((x, y) => y.weekly.rating - x.weekly.rating)
+      .slice(0, 10)
+      .map(a => ({ nickname: a.nickname, frame: a.frame || 'default', rating: a.stats ? a.stats.rating : 0, weekly: a.weekly.rating, wins: a.weekly.wins || 0 }));
+    ws.send(JSON.stringify({ type: 'weekly_top', top: rows, week: wk, resetsIn: msUntilWeekEnd() }));
+  }
+
+  // === DAILY QUESTS ===
+  else if (t === 'get_daily_quests') {
+    const nick = (msg.nickname || '').trim();
+    const acc = findAccountByNick(nick);
+    const empty = { date: todayKey(), quests: [] };
+    if (!acc) { ws.send(JSON.stringify({ type: 'daily_quests', ...empty, defs: pubQuestDefs() })); return; }
+    ensureDaily(acc); saveAccounts();
+    ws.send(JSON.stringify({ type: 'daily_quests', date: acc.daily.date, quests: acc.daily.quests, defs: pubQuestDefs() }));
+  }
+
+  else if (t === 'claim_daily_quest') {
+    const nick = (msg.nickname || '').trim();
+    const idx = parseInt(msg.index, 10);
+    const acc = findAccountByNick(nick);
+    if (!acc) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Аккаунт не найден' })); return; }
+    const daily = ensureDaily(acc);
+    const q = daily.quests[idx];
+    const def = q ? QUEST_DEFS.find(x => x.id === q.id) : null;
+    if (!q || !def) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Задание не найдено' })); return; }
+    if (q.claimed) { ws.send(JSON.stringify({ type: 'toast', text: 'Уже получено' })); return; }
+    if (q.progress < def.goal) { ws.send(JSON.stringify({ type: 'toast', text: 'Задание ещё не выполнено' })); return; }
+    q.claimed = true;
+    const bonus = 5;
+    acc.stats.rating += bonus;
+    const wk = isoWeekKey();
+    if (!acc.weekly || acc.weekly.week !== wk) acc.weekly = { week: wk, rating: 0, wins: 0, games: 0 };
+    acc.weekly.rating += bonus;
+    saveAccounts();
+    ws.send(JSON.stringify({ type: 'quest_claimed', index: idx, bonus, rating: acc.stats.rating }));
+    ws.send(JSON.stringify({ type: 'toast', text: '🎁 +' + bonus + ' рейтинга за задание!' }));
+  }
+
+  // === MATCH HISTORY ===
+  else if (t === 'get_history') {
+    const acc = findAccountByNick((msg.nickname || '').trim());
+    ws.send(JSON.stringify({ type: 'history_data', history: acc && Array.isArray(acc.history) ? acc.history : [] }));
+  }
+
+  // === REFERRALS ===
+  else if (t === 'get_my_ref') {
+    const acc = findAccountByNick((msg.nickname || '').trim());
+    if (!acc) { ws.send(JSON.stringify({ type: 'my_ref', code: '', invited: 0 })); return; }
+    if (!acc.ref_code) { acc.ref_code = crypto.randomUUID().replace(/-/g, '').slice(0, 7).toUpperCase(); saveAccounts(); }
+    const invited = Object.values(accounts).filter(a => a.ref_by === acc.ref_code).length;
+    ws.send(JSON.stringify({ type: 'my_ref', code: acc.ref_code, invited }));
+  }
+
+  else if (t === 'apply_ref_code') {
+    const nick = (msg.nickname || '').trim();
+    const rc = String(msg.code || '').trim().toUpperCase();
+    const me = findAccountByNick(nick);
+    if (!me) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Сначала зарегистрируйся' })); return; }
+    if (me.ref_by) { ws.send(JSON.stringify({ type: 'toast', text: 'Код уже применён' })); return; }
+    const inviter = Object.values(accounts).find(a => a.ref_code === rc);
+    if (!inviter || inviter.nickname.toLowerCase() === nick.toLowerCase()) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Код не найден' })); return; }
+    me.ref_by = rc;
+    grantAchievement(me, 'invite_friend');
+    const acc2 = findAccountByNick(inviter.nickname);
+    if (acc2) grantAchievement(acc2, 'invite_friend');
+    saveAccounts();
+    ws.send(JSON.stringify({ type: 'toast', text: '🤝 Код применён! Рамка «Дружба» разблокирована' }));
+    notifyUser(inviter.nickname, { type: 'toast', text: '🤝 ' + nick + ' применил твой код! Рамка «Дружба» твоя' });
+    tgNotify(inviter.nickname, '🤝 По твоему реферальному коду зарегистрировался ' + nick + '! Рамка «Дружба» разблокирована.');
+  }
+
+  // === TOURNAMENT ===
+  else if (t === 'tourn_join') {
+    const info = onlineClients.get(ws);
+    const nick = (info && info.nickname) || String(msg.nickname || '').trim();
+    if (!nick) return;
+    tournJoin(nick, ws);
+  }
+
+  else if (t === 'tourn_create' || t === 'tourn_start' || t === 'tourn_cancel') {
+    if (!isAdminWs(ws)) return;
+    if (t === 'tourn_create') tournCreate(ws);
+    if (t === 'tourn_start') tournStartRound(ws);
+    if (t === 'tourn_cancel') tournCancel(ws);
+  }
 }
+
+function sanitizeCustomWords(raw) {
+if (!Array.isArray(raw)) return [];
+return raw.map(w => String(w || '').trim()).filter(w => w.length >= 2 && w.length <= 60).slice(0, 120);
+}
+
+function makeRoom(code, me, ws, msg) {
+const r = {
+players: [me], names: new Map([[me, msg.name]]), conns: new Map([[me, ws]]),
+ratings: new Map([[me, msg.rating || 0]]),
+host: me, password: (msg.password || '').trim(), game_started: false, revealed: new Set(),
+round: 1, civScore: 0, spyScore: 0, banned: new Set(), bannedNames: new Set(),
+votes: {}, tb_votes: {}, tied_players: [], tb_round: 0,
+disc_order: [], disc_idx: 0, game_word: '', game_mode: 'classic', spy_indices: new Set(), rated: false,
+vote_history: [],
+public: !!msg.public, quick: !!msg.quick,
+custom_words: sanitizeCustomWords(msg.customWords),
+spy_guess: msg.spyGuess !== false,
+final_winner: null, spy_pending: false,
+specs: new Map(), afk: new Set(), grace: new Map(), emote_ts: {},
+};
+r.code = code;
+rooms[code] = r;
+ws._me = me;
+ws._code = code;
+return r;
+}
+
+function pickWordAndOptions(r, settings) {
+let pool;
+const themes = (settings && settings.themes) || ['movies'];
+if (r.custom_words && r.custom_words.length && (settings && settings.useCustom)) {
+  pool = r.custom_words;
+} else {
+  const theme = pick(themes);
+  pool = WORDS[theme] || WORDS.movies;
+}
+const word = pick(pool);
+const similar = pool.length > 1 ? pick(pool.filter(w => w !== word)) : word;
+let options = [word];
+const others = shuffle(pool.filter(w => w.toLowerCase() !== String(word).toLowerCase()));
+for (let i = 0; i < Math.min(5, others.length); i++) options.push(others[i]);
+return { word, similar, options: shuffle(options) };
+}
+
+function beginRound(r, settings) {
+r.game_started = true;
+r.revealed = new Set();
+r.votes = {};
+r.tb_votes = {};
+r.tied_players = [];
+r.disc_order = [];
+r.disc_idx = 0;
+r.banned = new Set();
+r.afk = new Set();
+if (r.grace) r.grace.clear();
+if (r.spy_timer) { clearTimeout(r.spy_timer); r.spy_timer = null; }
+r.spy_pending = false;
+r.final_winner = null;
+r.emote_ts = {};
+const picked = pickWordAndOptions(r, settings || {});
+const mode = (settings && settings.mode) || 'classic';
+const sc = r.players.length <= 5 ? 1 : 2;
+const si = new Set(shuffle(r.players.map((_, i) => i)).slice(0, sc));
+r.game_word = picked.word;
+r.similar_word = picked.similar;
+r.guess_options = picked.options;
+r.game_mode = mode;
+r.chat_mode = (settings && settings.chatMode) || 'voice';
+r.rated = !!(settings && settings.rated);
+r.spy_indices = si;
+broadcast(r, { type: 'game_started', themeEmoji: r.round > 1 ? '🔄' : '❓', themeLabel: r.round > 1 ? ('Раунд ' + r.round) : 'ШПИОН', chatMode: r.chat_mode, rated: r.rated });
+for (let i = 0; i < r.players.length; i++) {
+  const p = r.players[i];
+  const c = r.conns.get(p);
+  if (c && c.readyState === 1) {
+    const isSpy = si.has(i);
+    const w = (isSpy && mode === 'similar') ? picked.similar : picked.word;
+    c.send(JSON.stringify({ type: 'your_role', playerIndex: i, isSpy, word: w, mode, totalPlayers: r.players.length, round: r.round, civScore: r.civScore, spyScore: r.spyScore, chatMode: r.chat_mode, rated: r.rated }));
+  }
+}
+}
+
+
 
 const server = http.createServer((req, res) => {
   if (req.url === '/' || req.url === '/index.html') {
@@ -773,7 +1091,7 @@ const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
   ws.on('message', (data) => {
-    try { handleMessage(ws, JSON.parse(data.toString())); } catch (e) {}
+    try { handleMessage(ws, JSON.parse(data.toString())); } catch (e) { console.error('handleMessage error:', e && e.stack || e); }
   });
   ws.on('close', () => handleDisconnect(ws));
   ws.on('error', () => handleDisconnect(ws));
@@ -792,7 +1110,232 @@ setInterval(() => {
       onlineClients.delete(ws);
     }
   }
+  // Expired reconnect-grace seats leave the room
+  for (const [code, r] of Object.entries(rooms)) {
+    if (!r.grace) continue;
+    let changed = false;
+    for (const [nick, g] of [...r.grace]) {
+      if (now > g.until && r.players.includes(g.pid)) { removePlayerFinal(r, g.pid); changed = true; }
+      else if (now > g.until) r.grace.delete(nick);
+    }
+    if (changed && r.players.length === 0) { /* removed by removePlayerFinal */ }
+  }
 }, 30000);
+
+// === NEW FEATURE SUPPORT ===
+function msUntilWeekEnd() {
+  const now = new Date();
+  const end = new Date(now);
+  const day = now.getUTCDay() || 7;
+  end.setUTCDate(now.getUTCDate() + (8 - day));
+  end.setUTCHours(0, 0, 0, 0);
+  return Math.max(0, end - now);
+}
+
+function pubQuestDefs() {
+  return QUEST_DEFS.map(d => ({ id: d.id, icon: d.icon, name: d.name, desc: d.desc, goal: d.goal }));
+}
+
+function grantAchievement(acc, achId) {
+  if (!acc) return;
+  if (!acc.achievements) acc.achievements = [];
+  if (!acc.achievements.includes(achId)) acc.achievements.push(achId);
+}
+
+function isAdminWs(ws) {
+  const info = onlineClients.get(ws);
+  return !!(info && info.nickname && isAdminNick(String(info.nickname).toLowerCase()));
+}
+
+function tgNotify(nick, text) {
+  try {
+    const acc = findAccountByNick(nick);
+    if (acc && acc.tgId && typeof tgBot !== 'undefined' && tgBot) tgBot.sendMessage(String(acc.tgId), text).catch(() => {});
+  } catch (e) {}
+}
+
+// === TOURNAMENT STATE MACHINE ===
+let tourn = null;
+
+function tournStateMsg() {
+  if (!tourn) return { active: false };
+  return {
+    active: true,
+    phase: tourn.phase,
+    participants: tourn.participants.length,
+    names: tourn.participants.slice(0, 50),
+    round: tourn.round,
+    advancing: tourn.advancing ? tourn.advancing.length : 0,
+  };
+}
+
+function broadcastTournState() {
+  broadcastAll({ type: 'tourn_state', ...tournStateMsg() });
+}
+
+function tournCreate(ws) {
+  if (tourn && tourn.phase === 'running') { ws.send(JSON.stringify({ type: 'toast', text: 'Турнир уже идёт' })); return; }
+  tourn = { phase: 'signup', participants: [], round: 0, matches: [], advancing: [] };
+  broadcastTournState();
+  ws.send(JSON.stringify({ type: 'toast', text: '🏆 Турнир создан! Игроки могут записываться' }));
+  for (const a of Object.values(accounts)) tgNotify(a.nickname, '🏆 Объявлен турнир ШПИОН! Запись открыта — зайди в игру и нажми «Участвовать».');
+}
+
+function tournJoin(nick, ws) {
+  if (!tourn || tourn.phase !== 'signup') { ws.send(JSON.stringify({ type: 'toast', text: 'Запись на турнир не открыта' })); return; }
+  if (tourn.participants.includes(nick)) { ws.send(JSON.stringify({ type: 'toast', text: 'Ты уже в списке' })); return; }
+  tourn.participants.push(nick);
+  broadcastTournState();
+  ws.send(JSON.stringify({ type: 'toast', text: '✅ Ты записан на турнир!' }));
+}
+
+function makeMatchRooms(namesArr, roundNo) {
+  const shuffled = shuffle([...namesArr]);
+  const groups = [];
+  const rest = [...shuffled];
+  while (rest.length > 0) {
+    if (rest.length <= 8) { groups.push(rest.splice(0, rest.length)); }
+    else { groups.push(rest.splice(0, 5)); }
+  }
+  const matches = [];
+  for (const group of groups) {
+    if (group.length < 3) { matches.push({ bye: group }); continue; }
+    let code = genCode();
+    while (rooms[code]) code = genCode();
+    const me = crypto.randomUUID();
+    const r = makeRoom(code, me, { send: () => {}, readyState: 1 }, { name: group[0], password: '', public: false });
+    r.tourn_match = { round: roundNo };
+    r.tourn_placeholders = new Set([me]);
+    for (let i = 1; i < group.length; i++) {
+      const pid = crypto.randomUUID();
+      r.players.push(pid);
+      r.names.set(pid, group[i]);
+      r.ratings.set(pid, 0);
+      r.tourn_placeholders.add(pid);
+    }
+    matches.push({ code, players: [...group], done: false });
+  }
+  return matches;
+}
+
+function tournStartRound(adminWs) {
+  if (!tourn) { adminWs.send(JSON.stringify({ type: 'toast', text: 'Сначала создай турнир' })); return; }
+  if (tourn.phase === 'running') { adminWs.send(JSON.stringify({ type: 'toast', text: 'Раунд уже идёт' })); return; }
+  let pool = tourn.phase === 'signup' ? tourn.participants : tourn.advancing;
+  pool = pool.filter(n => isNickOnline(n));
+  if (pool.length < 3) { adminWs.send(JSON.stringify({ type: 'toast', text: 'Нужно минимум 3 онлайн-участника' })); return; }
+  if (pool.length <= 4) {
+    startFinalMatch(pool, adminWs);
+    return;
+  }
+  tourn.round++;
+  tourn.matches = makeMatchRooms(pool, tourn.round);
+  tourn.nextAdvancing = [];
+  tourn.phase = 'running';
+  for (const m of tourn.matches) {
+    if (m.bye) { m.done = true; tourn.nextAdvancing.push(...m.bye); continue; }
+    for (const n of m.players) {
+      const c = onlineNickSocket(n);
+      if (c) {
+        try { c.send(JSON.stringify({ type: 'tourn_assign', roomCode: m.code })); } catch (e) {}
+        tgNotify(n, '🏆 Турнир, раунд ' + tourn.round + ': твоя комната ' + m.code + '. Удачи!');
+      }
+    }
+  }
+  broadcastTournState();
+  adminWs.send(JSON.stringify({ type: 'toast', text: '🏆 Раунд ' + tourn.round + ': комнат создано: ' + tourn.matches.filter(m => !m.bye).length }));
+}
+
+function startFinalMatch(pool, adminWs) {
+  let code = genCode();
+  while (rooms[code]) code = genCode();
+  const me = crypto.randomUUID();
+  const r = makeRoom(code, me, { send: () => {}, readyState: 1 }, { name: pool[0], password: '' });
+  r.tourn_final = true;
+  r.tourn_match = { round: 99 };
+  r.tourn_placeholders = new Set([me]);
+  for (let i = 1; i < pool.length; i++) {
+    const pid = crypto.randomUUID();
+    r.players.push(pid);
+    r.names.set(pid, pool[i]);
+    r.ratings.set(pid, 0);
+    r.tourn_placeholders.add(pid);
+  }
+  tourn.round++;
+  tourn.matches = [{ code, players: [...pool], done: false }];
+  tourn.nextAdvancing = [];
+  tourn.phase = 'running';
+  tourn.isFinal = true;
+  for (const n of pool) {
+    const c = onlineNickSocket(n);
+    if (c) { try { c.send(JSON.stringify({ type: 'tourn_assign', roomCode: code, final: true })); } catch (e) {} }
+  }
+  broadcastTournState();
+  adminWs.send(JSON.stringify({ type: 'toast', text: '🏆 ФИНАЛ! Комната ' + code }));
+}
+
+function tournReportMatch(r) {
+  if (!tourn || tourn.phase !== 'running' || !r.tourn_match) return;
+  const m = tourn.matches.find(x => !x.done && x.code === r.code);
+  if (!m || m.done) return;
+  m.done = true;
+  const winnerSpy = r.final_winner === 'spy';
+  const si = new Set([...(r.spy_indices || [])]);
+  const winners = [];
+  r.players.forEach((pid, i) => {
+    const isOnWinningSide = winnerSpy ? si.has(i) : !si.has(i);
+    if (isOnWinningSide) {
+      const n = r.names.get(pid);
+      if (n) winners.push(n);
+    }
+  });
+  tourn.nextAdvancing = (tourn.nextAdvancing || []).concat(winners);
+  broadcast(r, { type: 'toast', text: '🏆 Победившая сторона прошла дальше!' });
+  checkTournRoundEnd(r);
+}
+
+function checkTournRoundEnd(lastRoom) {
+  if (!tourn || tourn.phase !== 'running') return;
+  const pending = tourn.matches.filter(m => !m.done && !m.bye).length;
+  if (pending > 0) return;
+  const adv = [...new Set(tourn.nextAdvancing)].filter(isNickOnline);
+  if (adv.length === 0) { tournCancel(lastRoom); return; }
+  if (adv.length <= 4 || tourn.isFinal) {
+    const champions = adv;
+    for (const n of champions) {
+      const acc = findAccountByNick(n);
+      if (acc) { grantAchievement(acc, 'champion'); saveAccounts(); }
+      tgNotify(n, '👑 ТЫ ЧЕМПИОН ТУРНИРА ШПИОН! Рамка «Чемпион» разблокирована!');
+      const c = onlineNickSocket(n);
+      if (c) { try { c.send(JSON.stringify({ type: 'toast', text: '👑 Ты чемпион турнира! Рамка «Чемпион» разблокирована' })); } catch (e) {} }
+    }
+    broadcastAll({ type: 'toast', text: '🏆 Турнир завершён! Чемпионы: ' + champions.join(', ') });
+    tourn = null;
+    broadcastTournState();
+  } else {
+    tourn.advancing = adv;
+    tourn.phase = 'between';
+    broadcastAll({ type: 'toast', text: '🏆 Раунд ' + tourn.round + ' завершён. Осталось: ' + adv.length + '. Админ запускает следующий раунд' });
+    broadcastTournState();
+  }
+}
+
+function tournCancel(ws) {
+  if (!tourn) { if (ws && ws.send) ws.send(JSON.stringify({ type: 'toast', text: 'Активного турнира нет' })); return; }
+  tourn = null;
+  broadcastTournState();
+  broadcastAll({ type: 'toast', text: 'Турнир отменён админом' });
+  if (ws && ws.send) ws.send(JSON.stringify({ type: 'toast', text: 'Турнир отменён' }));
+}
+
+function onlineNickSocket(nick) {
+  if (!nick) return null;
+  const target = String(nick).toLowerCase();
+  for (const [c, info] of onlineClients) {
+    if (info.nickname && info.nickname.toLowerCase() === target && c.readyState === 1) return c;
+  }
+  return null;
+}
 
 // === TELEGRAM BOT ===
 // === ACCOUNTS (in-game registration) ===
@@ -897,6 +1440,59 @@ function getAccountStats(nick) {
   return acc ? (acc.stats || {}) : null;
 }
 
+function isoWeekKey(d) {
+  const dt = d || new Date();
+  const t = new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+  return t.getUTCFullYear() + '-W' + week;
+}
+
+function todayKey(d) {
+  const dt = d || new Date();
+  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+}
+
+const QUEST_DEFS = [
+  { id: 'play_2',    icon: '🎮', name: 'Разминка',        desc: 'Сыграй 2 игры',                 goal: 2 },
+  { id: 'play_3',    icon: '🎯', name: 'Втянулся',        desc: 'Сыграй 3 игры',                 goal: 3 },
+  { id: 'win_1',     icon: '⭐', name: 'Победа дня',      desc: 'Победи 1 игру',                 goal: 1 },
+  { id: 'win_2',     icon: '🏆', name: 'На волне',        desc: 'Победи 2 игры',                 goal: 2 },
+  { id: 'spy_win',   icon: '🕵️', name: 'Тайный агент',   desc: 'Победи как шпион',              goal: 1 },
+  { id: 'civ_win',   icon: '👥', name: 'Глазастый',       desc: 'Победи мирным',                 goal: 1 },
+];
+
+function ensureDaily(acc) {
+  const tk = todayKey();
+  if (!acc.daily || acc.daily.date !== tk) {
+    const seed = (tk + (acc.nickname || '')).split('').reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+    const idxs = [];
+    let s = seed || 7;
+    const pool = QUEST_DEFS.map((_, i) => i);
+    while (idxs.length < 3 && pool.length) {
+      s = (s * 1103515245 + 12345) >>> 0;
+      const i = pool.splice(s % pool.length, 1)[0];
+      idxs.push(i);
+    }
+    acc.daily = {
+      date: tk,
+      quests: idxs.map(i => ({ id: QUEST_DEFS[i].id, progress: 0, claimed: false })),
+    };
+  }
+  return acc.daily;
+}
+
+function questProgress(acc, qid, inc) {
+  const daily = ensureDaily(acc);
+  const q = daily.quests.find(x => x.id === qid);
+  if (!q || q.claimed) return;
+  q.progress += inc;
+  const def = QUEST_DEFS.find(x => x.id === qid);
+  if (def && q.progress >= def.goal) q.progress = def.goal;
+}
+
 function updateAccountStats(nick, gameResult) {
   const acc = findAccountByNick(nick);
   if (!acc) return null;
@@ -937,6 +1533,33 @@ function updateAccountStats(nick, gameResult) {
   acc.stats.rating = Math.max(0, acc.stats.rating + delta);
   if (acc.stats.rating < 0) acc.stats.rating = 0;
 
+  // Weekly rating tracking
+  const wk = isoWeekKey();
+  if (!acc.weekly || acc.weekly.week !== wk) acc.weekly = { week: wk, rating: 0, wins: 0, games: 0 };
+  acc.weekly.rating += delta;
+  acc.weekly.games++;
+  if (won) acc.weekly.wins++;
+
+  // Daily quests
+  ensureDaily(acc);
+  questProgress(acc, 'play_2', 1);
+  questProgress(acc, 'play_3', 1);
+  if (won) questProgress(acc, gameResult.isSpy ? 'spy_win' : 'civ_win', 1);
+  if (won) { questProgress(acc, 'win_1', 1); questProgress(acc, 'win_2', 1); }
+
+  // Match history
+  if (!Array.isArray(acc.history)) acc.history = [];
+  acc.history.unshift({
+    at: new Date().toISOString(),
+    word: String(gameResult.word || '').slice(0, 40),
+    role: gameResult.isSpy ? 'spy' : 'civ',
+    won,
+    delta,
+    rating: acc.stats.rating,
+    players: parseInt(gameResult.playersCount, 10) || 0,
+  });
+  if (acc.history.length > 20) acc.history.length = 20;
+
   const placementLeft = Math.max(0, PLACEMENT_GAMES - acc.stats.games);
   const calibrated = !placingBefore || placementLeft === 0;
 
@@ -951,7 +1574,7 @@ function updateAccountStats(nick, gameResult) {
   checkAchievements(acc);
   saveAccounts();
 
-  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0, frame: acc.frame || 'default' };
+  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0, frame: acc.frame || 'default', weeklyRating: acc.weekly ? acc.weekly.rating : 0, won };
 }
 
 function evalPlayerPerf(r, pid, idx, isSpy, roundsPlayed) {
@@ -981,7 +1604,7 @@ function evalPlayerPerf(r, pid, idx, isSpy, roundsPlayed) {
 function finishRatedGame(r) {
   if (!r.rated) return;
   const si = [...r.spy_indices];
-  const spyWon = r.spyScore >= 3;
+  const spyWon = r.final_winner ? (r.final_winner === 'spy') : (r.spyScore >= 3);
   const roundsPlayed = (Array.isArray(r.vote_history) ? r.vote_history : []).length;
   const results = [];
   r.players.forEach(pid => {
@@ -999,7 +1622,7 @@ function finishRatedGame(r) {
     });
     const avgOpp = oppCount ? Math.round(oppSum / oppCount) : undefined;
 
-    const res = updateAccountStats(name, { isSpy, spyWon, perf, avgOpp });
+    const res = updateAccountStats(name, { isSpy, spyWon, perf, avgOpp, word: r.game_word, playersCount: r.players.length });
     if (res) results.push(res);
   });
   if (results.length) broadcast(r, { type: 'rating_results', results });
@@ -1022,6 +1645,8 @@ const ACHIEVEMENTS = [
   { id: 'rating_300',    icon: '💫', name: 'Суперзвезда',       desc: 'Набери рейтинг 300',         frame: 'galaxy',    check: s => s.rating >= 300 },
   { id: 'winrate_70',    icon: '🧠', name: 'Стратег',           desc: 'Винрейт 70%+ (10+ игр)',     frame: 'brain',     check: s => s.games >= 10 && (s.wins / s.games) >= 0.7 },
   { id: 'spy_winrate',   icon: '🎭', name: 'Актёр',             desc: 'Шпион-винрейт 60%+ (5+ игр)',frame: 'theater',   check: s => s.spyGames >= 5 && (s.spyWins / s.spyGames) >= 0.6 },
+  { id: 'invite_friend', icon: '🤝', name: 'Дружелюбный',      desc: 'Пригласи друга по коду',     frame: 'friendship', check: () => false },
+  { id: 'champion',      icon: '👑', name: 'Чемпион турнира',   desc: 'Победи в турнире',           frame: 'champion_t', check: () => false },
   // Rank-based frames
   { id: 'rank_silver',   icon: '⚪', name: 'Серебряный путь',   desc: 'Достигни Серебряного I',     frame: 'r_silver',   check: s => s.rating >= 300 },
   { id: 'rank_gold',     icon: '🟡', name: 'Золотой путь',      desc: 'Достигни Золотого I',        frame: 'r_gold',     check: s => s.rating >= 660 },
@@ -1069,7 +1694,9 @@ const FRAMES = {
   r_unreal:  { border: '3px solid #aa44ff',               shadow: '0 0 22px rgba(170,68,255,.6)', name: 'Нереальный I' },
   r_legend:  { border: '3px solid #ff00ff',               shadow: '0 0 25px rgba(255,0,255,.6)', name: 'Легенда' },
   r_immortal:{ border: '3px solid #00ffff',               shadow: '0 0 25px rgba(0,255,255,.6)', name: 'Бессмертный' },
-  r_ge:      { border: '3px solid #fff200',               shadow: '0 0 30px rgba(255,242,0,.7)', name: 'Глобальная Элита' },
+  r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)', name: 'Глобальная Элита' },
+  friendship:{ border: '3px solid #00d4aa', shadow: '0 0 16px rgba(0,212,170,.5)', name: 'Дружба' },
+  champion_t:{ border: '4px double #ffd700', shadow: '0 0 24px rgba(255,215,0,.8)', name: 'Чемпион' },
 };
 
 function checkAchievements(acc) {

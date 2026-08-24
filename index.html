@@ -1205,7 +1205,9 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
       <button class="btn btn-lg" id="online-join-btn" style="flex:1;background:rgba(var(--neon2-rgb),.08);border-color:rgba(var(--neon2-rgb),.3);color:var(--neon2)" data-i18n="online.join">🔗 Войти по коду</button>
     </div>
     <button class="btn btn-lg fade-in fade-in-d35" id="online-random-btn" style="width:100%;background:rgba(var(--neon3-rgb,100,100,255),.08);border-color:rgba(var(--neon3-rgb,100,100,255),.3);color:rgb(var(--neon3-rgb,100,100,255))">🎲 Случайная комната</button>
+    <button class="btn btn-lg fade-in fade-in-d35" id="online-quick-btn" style="width:100%;background:rgba(255,210,0,.1);border-color:rgba(255,210,0,.4);color:#ffd200">⚡ Быстрая игра</button>
     <button class="btn btn-lg fade-in fade-in-d4" id="online-back-btn" style="background:rgba(var(--neon-rgb),.1);border-color:rgba(var(--neon-rgb),.25);color:var(--text);width:100%" data-i18n="names.back">← Назад</button>
+    <div id="tourn-banner" style="display:none;width:100%;margin-top:10px;padding:10px 12px;border-radius:14px;background:linear-gradient(135deg,rgba(255,215,0,.12),rgba(255,160,0,.06));border:2px solid rgba(255,200,0,.45);color:#ffd200;font-size:.85em;text-align:center"></div>
     <div class="fade-in fade-in-d4" id="online-status" style="font-size:0.82em;color:rgba(var(--neon-rgb),.5);margin-top:4px"></div>
   </div>
 
@@ -1277,6 +1279,10 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
       <button class="btn btn-lg" id="online-mic-btn" style="flex:1;background:rgba(var(--neon-rgb),.08);border-color:rgba(var(--neon-rgb),.25);color:var(--text)">🎤 Микрофон</button>
     </div>
     <div id="online-voice-status" style="font-size:0.75em;color:rgba(var(--neon-rgb),.4);margin-top:4px"></div>
+    <div id="emote-bar" style="display:flex;gap:8px;justify-content:center;margin-top:10px">
+      <button class="emote-btn" data-e="😱">😱</button><button class="emote-btn" data-e="🤔">🤔</button><button class="emote-btn" data-e="😂">😂</button><button class="emote-btn" data-e="🔥">🔥</button><button class="emote-btn" data-e="👍">👍</button><button class="emote-btn" data-e="❤️">❤️</button><button class="emote-btn" data-e="😮">😮</button><button class="emote-btn" data-e="😈">😈</button>
+    </div>
+    <div id="emote-layer" style="position:absolute;inset:0;pointer-events:none;overflow:hidden"></div>
     <button class="btn btn-lg fade-in fade-in-d4" id="online-disc-vote-btn" style="width:100%;display:none;background:rgba(255,51,102,.08);border-color:rgba(255,51,102,.2);color:#ff6677" data-i18n="online.start_vote">🗳️ Голосовать</button>
   </div>
 
@@ -5017,10 +5023,18 @@ function olHandle(msg) {
       olShowOnlineResults(msg);
       break;
     }
+    case 'spectating': {
+      OL.myId = 'spec';
+      OL.players = msg.players || [];
+      showToast('👀 Наблюдаешь за ' + msg.roomCode);
+      showScreen('screen-online-disc');
+      break;
+    }
     case 'rating_results': {
       OL.ratingResults = msg.results || [];
       const blk = document.getElementById('online-rating-block');
       if (blk && document.getElementById('screen-online-results').classList.contains('active')) renderMyRating();
+      addShareButton();
       break;
     }
     case 'game_restarted': {
@@ -5034,23 +5048,79 @@ function olHandle(msg) {
       break;
     }
     case 'error': {
+      if (msg.canSpectate && !OL.inRoom) {
+        showSpectateConfirm(msg.roomCode);
+        break;
+      }
       olShowStatus('⚠️ ' + msg.message);
       break;
     }
-    case 'toast': {
-      if (typeof window.admToast === 'function') window.admToast(msg.text || '');
+    case 'quick_found': {
+      OL.myId = msg.playerId;
+      OL.players = msg.players;
+      showScreen('screen-lobby');
+      if (typeof olRenderLobbyPlayers === 'function') olRenderLobbyPlayers();
+      olShowStatus(msg.created ? '⚡ Комната создана, ждём игроков...' : '⚡ Ты в комнате ' + msg.roomCode);
       break;
     }
-    case 'voice_offer': {
-      olHandleVoiceOffer(msg);
+    case 'daily_quests': {
+      renderQuests(msg);
       break;
     }
-    case 'voice_answer': {
-      olHandleVoiceAnswer(msg);
+    case 'quest_claimed': {
+      showToast('🎁 +' + msg.bonus + ' рейтинга!');
+      const n = hubNick();
+      if (n) olSend({ type: 'get_daily_quests', nickname: n });
       break;
     }
-    case 'voice_ice': {
-      olHandleVoiceICE(msg);
+    case 'weekly_top': {
+      renderTop(msg);
+      break;
+    }
+    case 'history_data': {
+      renderHistory(msg);
+      break;
+    }
+    case 'my_ref': {
+      renderRef(msg);
+      break;
+    }
+    case 'room_reconnected': {
+      OL.myId = msg.playerId;
+      OL.players = msg.players;
+      showScreen(msg.gameStarted ? 'screen-online-ready' : 'screen-lobby');
+      olRenderLobbyPlayers();
+      showToast('🔌 Ты вернулся в игру!');
+      break;
+    }
+    case 'player_reconnected': {
+      showToast('👋 ' + (OL.players.find(p => p.id === msg.playerId)?.name || 'Игрок') + ' вернулся');
+      break;
+    }
+    case 'player_disconnected': {
+      showToast('📴 ' + msg.name + ' отключился (' + Math.round((msg.graceMs || 90000) / 1000) + ' сек на возврат)');
+      break;
+    }
+    case 'host_changed': {
+      if (msg.newHost === OL.myId) showToast('👑 Ты теперь хост!');
+      olRenderLobbyPlayers();
+      break;
+    }
+    case 'spy_chance': {
+      showSpyGuess(msg);
+      break;
+    }
+    case 'emote': {
+      spawnEmote(msg.emote);
+      break;
+    }
+    case 'tourn_state': {
+      renderTournBanner(msg);
+      break;
+    }
+    case 'tourn_assign': {
+      showToast('🏆 Турнир: подключаюсь...');
+      olAutoJoinTournRoom(msg.roomCode);
       break;
     }
     case 'voice_mute': {
@@ -5059,6 +5129,295 @@ function olHandle(msg) {
       break;
     }
   }
+}
+
+function olAutoJoinTournRoom(code) {
+  const name = (localStorage.getItem('spy_player_name') || OL.nick || '').trim();
+  if (!name) return;
+  if (OL.ws && OL.ws.readyState === 1) {
+    olSend({ type: 'join_room', name, roomCode: code, password: '', rating: loadStats().rating || 0 });
+  } else {
+    olConnect(name, () => olSend({ type: 'join_room', name, roomCode: code, password: '', rating: loadStats().rating || 0 }));
+  }
+}
+
+document.getElementById('online-quick-btn').addEventListener('click', () => {
+  SFX.click();
+  const name = document.getElementById('online-name-input').value.trim() || 'Игрок';
+  localStorage.setItem('spy_player_name', name);
+  localStorage.setItem('spy_server_url', document.getElementById('server-input').value.trim());
+  olShowStatus('⚡ Ищем подходящую комнату...');
+  olConnect(name, () => {
+    olSend({ type: 'quick_play', name: name, rating: loadStats().rating || 0 });
+  });
+});
+
+function showToast(text) {
+  try { window.admToast ? window.admToast(text) : olShowStatus(text); } catch(e) {}
+}
+
+function showSpectateConfirm(code) {
+  if (!code || !confirm('В комнату ' + code + ' могут попасть только друзья игроков. Наблюдать за игрой?')) return;
+  const name = hubNick();
+  if (OL.ws && OL.ws.readyState === 1) olSend({ type: 'join_room', name, roomCode: code, spectate: true });
+  else olConnect(name, () => olSend({ type: 'join_room', name, roomCode: code, spectate: true }));
+}
+
+function renderTournBanner(st) {
+  const b = document.getElementById('tourn-banner');
+  if (!b) return;
+  if (!st.active) { b.style.display = 'none'; return; }
+  b.style.display = 'block';
+  if (st.phase === 'signup') {
+    b.innerHTML = '🏆 Идёт запись на турнир! Участников: ' + st.participants +
+      '<br><button class="tourn-banner-btn" id="tourn-join-btn">Участвовать!</button>';
+    const btn = document.getElementById('tourn-join-btn');
+    if (btn) btn.onclick = () => {
+      SFX.click();
+      olSend({ type: 'tourn_join', nickname: hubNick() });
+      btn.disabled = true; btn.textContent = '✅ Ты записан';
+    };
+  } else if (st.phase === 'running') {
+    b.innerHTML = '🏆 Турнир идёт! Раунд ' + st.round + '. Осталось игроков: ~' + st.participants;
+  } else {
+    b.innerHTML = '🏆 Турнир: раунд ' + st.round + ' завершён. Ждём продолжения...';
+  }
+}
+
+let spyGuessTimerIv = null;
+function showSpyGuess(msg) {
+  const ov = document.getElementById('spy-guess-overlay');
+  if (!ov) return;
+  ov.style.display = 'flex';
+  const box = document.getElementById('spy-guess-options');
+  box.innerHTML = '';
+  (msg.options || []).forEach((w, i) => {
+    const b = document.createElement('button');
+    b.className = 'spy-opt';
+    b.textContent = w;
+    b.onclick = () => {
+      SFX.click();
+      olSend({ type: 'spy_guess', optionIndex: i });
+      endSpyGuess();
+      showToast('🤞 Твой выбор: ' + w);
+    };
+    box.appendChild(b);
+  });
+  let left = msg.timeoutMs ? Math.round(msg.timeoutMs / 1000) : 30;
+  document.getElementById('spy-guess-timer').textContent = left;
+  clearInterval(spyGuessTimerIv);
+  spyGuessTimerIv = setInterval(() => {
+    left--;
+    const el = document.getElementById('spy-guess-timer');
+    if (el) el.textContent = Math.max(0, left);
+    if (left <= 0) endSpyGuess();
+  }, 1000);
+}
+function endSpyGuess() {
+  clearInterval(spyGuessTimerIv);
+  spyGuessTimerIv = null;
+  const ov = document.getElementById('spy-guess-overlay');
+  if (ov) ov.style.display = 'none';
+}
+
+function spawnEmote(emote) {
+  const layer = document.getElementById('emote-layer');
+  const scr = document.getElementById('screen-online-disc');
+  if (!layer) return;
+  if (scr && !scr.classList.contains('active')) return;
+  const el = document.createElement('div');
+  el.className = 'fly-emote';
+  el.textContent = emote;
+  el.style.left = (10 + Math.random() * 75) + '%';
+  el.style.bottom = '80px';
+  layer.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
+document.querySelectorAll('.emote-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    SFX.click();
+    spawnEmote(b.dataset.e);
+    olSend({ type: 'emote', emote: b.dataset.e });
+  });
+});
+
+// === PROGRESS HUB ===
+const HUB = { nick: '' };
+document.getElementById('hub-fab-btn').addEventListener('click', () => {
+  SFX.click();
+  const w = document.getElementById('hub-wrap');
+  w.classList.toggle('open');
+  if (w.classList.contains('open')) hubRefresh();
+});
+document.getElementById('hub-close-btn').addEventListener('click', () => {
+  SFX.click();
+  document.getElementById('hub-wrap').classList.remove('open');
+});
+['hubtab-q','hubtab-t','hubtab-h','hubtab-r'].forEach((id, ix) => {
+  document.getElementById(id).addEventListener('click', () => {
+    SFX.click();
+    document.querySelectorAll('#hub-wrap .chat-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.querySelectorAll('#hub-wrap .chat-page').forEach(p => p.classList.remove('active'));
+    document.getElementById(['hubpage-q','hubpage-t','hubpage-h','hubpage-r'][ix]).classList.add('active');
+  });
+});
+function hubNick() {
+  return HUB.nick || localStorage.getItem('spy_player_name') || localStorage.getItem('shpion_hub_nick') || '';
+}
+function hubRefresh() {
+  if (!olSend) return;
+  const nick = hubNick();
+  if (nick && OL.ws && OL.ws.readyState === 1) {
+    olSend({ type: 'get_daily_quests', nickname: nick });
+    olSend({ type: 'get_history', nickname: nick });
+    olSend({ type: 'get_my_ref', nickname: nick });
+  }
+  olSend({ type: 'get_weekly_top' });
+}
+function questDef(defs, id) { return (defs || []).find(d => d.id === id) || { icon: '🎯', name: id, desc: '', goal: 1 }; }
+function renderQuests(msg) {
+  const list = document.getElementById('quest-list');
+  if (!list) return;
+  list.innerHTML = '';
+  (msg.quests || []).forEach((q, ix) => {
+    const d = questDef(msg.defs, q.id);
+    const done = q.progress >= d.goal;
+    const item = document.createElement('div');
+    item.className = 'quest-item';
+    let action = '';
+    if (q.claimed) action = '<span style="color:#4caf50;font-weight:800">✓ Получено</span>';
+    else if (done) action = '<button class="chat-add-btn" data-q="' + ix + '">Забрать 🎁</button>';
+    else action = '<span style="font-size:.78em;color:#888">' + q.progress + '/' + d.goal + '</span>';
+    item.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center"><span>' + d.icon + ' <b>' + d.name + '</b></span>' + action + '</div>' +
+      '<div style="font-size:.76em;color:#999;margin-top:4px">' + d.desc + '</div>' +
+      '<div style="height:6px;background:rgba(255,255,255,.08);border-radius:3px;margin-top:8px"><div style="width:' + Math.min(100, (q.progress / d.goal) * 100) + '%;height:100%;border-radius:3px;background:linear-gradient(90deg,#00d4aa,#ffd200)"></div></div>';
+    list.appendChild(item);
+  });
+  list.querySelectorAll('[data-q]').forEach(b => {
+    b.onclick = () => olSend({ type: 'claim_daily_quest', nickname: hubNick(), index: parseInt(b.dataset.q, 10) });
+  });
+}
+function renderTop(msg) {
+  const list = document.getElementById('top-list');
+  if (!list) return;
+  const info = document.getElementById('top-info');
+  if (info) {
+    const hrs = msg.resetsIn ? Math.ceil(msg.resetsIn / 3600000) : 0;
+    info.textContent = 'Топ недели • сброс через ' + hrs + ' ч';
+  }
+  list.innerHTML = '';
+  if (!(msg.top || []).length) { list.innerHTML = '<div style="color:#666;font-size:.85em;text-align:center;padding:16px">Пока никто не набрал очков на этой неделе</div>'; return; }
+  msg.top.forEach((r, i) => {
+    const row = document.createElement('div');
+    row.className = 'top-row';
+    row.innerHTML = '<b style="width:26px;color:' + (i === 0 ? '#ffd200' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#888') + '">' + (i + 1) + '</b><span style="flex:1">' + r.nickname + '</span><span style="color:#00d4aa">+' + r.weekly + '</span><span style="opacity:.5;font-size:.85em">' + r.rating + '</span>';
+    list.appendChild(row);
+  });
+}
+function sparkline(history) {
+  const svg = document.getElementById('rating-spark');
+  if (!svg) return;
+  const pts = history.slice().reverse().map(h => h.rating).filter(v => typeof v === 'number');
+  if (pts.length < 2) { svg.innerHTML = '<text x="150" y="35" text-anchor="middle" fill="#555" font-size="11">Мало данных для графика</text>'; return; }
+  const min = Math.min(...pts), max = Math.max(...pts), rng = (max - min) || 1;
+  const path = pts.map((v, i) => (i ? 'L' : 'M') + ((i / (pts.length - 1)) * 290 + 5).toFixed(1) + ',' + (55 - ((v - min) / rng) * 50).toFixed(1)).join(' ');
+  const col = pts[pts.length - 1] >= pts[0] ? '#00ff88' : '#ff5577';
+  svg.innerHTML = '<path d="' + path + '" fill="none" stroke="' + col + '" stroke-width="2.5" stroke-linecap="round"/><circle cx="295" cy="' + (55 - ((pts[pts.length - 1] - min) / rng) * 50).toFixed(1) + '" r="3" fill="' + col + '"/>';
+}
+function renderHistory(msg) {
+  const list = document.getElementById('hist-list');
+  if (!list) return;
+  sparkline(msg.history || []);
+  list.innerHTML = '';
+  if (!(msg.history || []).length) { list.innerHTML = '<div style="color:#666;font-size:.85em;text-align:center;padding:16px">Сыграй первую рейтинговую игру!</div>'; return; }
+  (msg.history || []).slice(0, 20).forEach(h => {
+    const it = document.createElement('div');
+    it.className = 'hist-item';
+    const dt = h.at ? new Date(h.at).toLocaleDateString() : '';
+    it.innerHTML = '<span>' + (h.won ? '✅' : '❌') + ' ' + (h.word || '—') + ' <span style="opacity:.5">(' + (h.role === 'spy' ? '🕵️ шпион' : '👤 мирный') + ')</span></span>' +
+      '<span style="display:flex;gap:10px;align-items:center"><span style="opacity:.45">' + dt + '</span><b style="color:' + (h.delta >= 0 ? '#00ff88' : '#ff5577') + '">' + (h.delta >= 0 ? '+' : '') + (h.delta || 0) + '</b><span style="opacity:.7">' + (h.rating || '') + '</span></span>';
+    list.appendChild(it);
+  });
+}
+function renderRef(msg) {
+  const el = document.getElementById('my-ref-code');
+  if (el && msg.code) el.textContent = msg.code.split('').join(' ');
+  const inv = document.getElementById('ref-invited');
+  if (inv && typeof msg.invited === 'number') inv.textContent = msg.invited ? ('🤝 По твоему коду присоединились: ' + msg.invited) : '';
+}
+document.getElementById('ref-copy-btn').addEventListener('click', () => {
+  SFX.click();
+  const code = (document.getElementById('my-ref-code').textContent || '').replace(/\s/g, '');
+  if (navigator.clipboard) navigator.clipboard.writeText(code).then(() => showToast('📋 Скопировано: ' + code));
+});
+document.getElementById('ref-apply-btn').addEventListener('click', () => {
+  SFX.click();
+  const code = (document.getElementById('ref-code-input').value || '').trim().toUpperCase();
+  if (!code) return;
+  olSend({ type: 'apply_ref_code', nickname: hubNick(), code });
+});
+
+</script>
+<script>
+function addShareButton() {
+  const row = document.getElementById('online-results-buttons');
+  if (!row || document.getElementById('share-result-btn')) return;
+  const b = document.createElement('button');
+  b.className = 'btn';
+  b.id = 'share-result-btn';
+  b.style.background = 'rgba(0,212,170,.12)';
+  b.style.borderColor = 'rgba(0,212,170,.4)';
+  b.style.color = '#00d4aa';
+  b.textContent = '📤 Поделиться';
+  b.onclick = () => { SFX.click(); shareResultCard(); };
+  row.appendChild(b);
+}
+
+function shareResultCard() {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 360;
+    const x = c.getContext('2d');
+    const g = x.createLinearGradient(0, 0, 640, 360);
+    g.addColorStop(0, '#12122a'); g.addColorStop(1, '#1c1233');
+    x.fillStyle = g; x.fillRect(0, 0, 640, 360);
+    x.strokeStyle = 'rgba(0,255,136,.5)'; x.lineWidth = 3;
+    x.strokeRect(10, 10, 620, 340);
+    x.fillStyle = '#00ff88';
+    x.font = '900 44px sans-serif'; x.textAlign = 'center';
+    x.fillText('ШПИОН', 320, 70);
+    const word = OL.gameWord || OL.myRole && OL.myRole.word || '???';
+    const meRes = (OL.ratingResults || []).find(r => r.nickname === localStorage.getItem('spy_player_name'));
+    x.fillStyle = '#fff';
+    x.font = '700 30px sans-serif';
+    x.fillText('Слово: ' + word, 320, 140);
+    if (meRes) {
+      x.fillStyle = meRes.won ? '#00ff88' : '#ff5577';
+      x.font = '800 36px sans-serif';
+      x.fillText((meRes.won ? 'ПОБЕДА' : 'ПОРАЖЕНИЕ') + '  ' + (meRes.delta >= 0 ? '+' : '') + meRes.delta, 320, 200);
+      x.fillStyle = '#aaa';
+      x.font = '500 24px sans-serif';
+      x.fillText('Рейтинг: ' + meRes.rating + '  •  ' + (meRes.role === 'spy' ? '🕵️ Шпион' : '👤 Мирный'), 320, 245);
+    }
+    x.fillStyle = 'rgba(255,255,255,.45)';
+    x.font = '400 20px sans-serif';
+    x.fillText('shpiongame.ru', 320, 320);
+    c.toBlob(blob => {
+      if (!blob) return;
+      const file = new File([blob], 'shpion.png', { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: 'ШПИОН' }).catch(() => {});
+      } else {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'shpion.png';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+        showToast('📸 Карточка сохранена');
+      }
+    });
+  } catch (e) { showToast('Не получилось создать карточку'); }
 }
 
 function olShowRole() {
@@ -6082,6 +6441,59 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
     </div>
   </div>
 </div>
+<!-- Progress Hub: quests / weekly top / history / referrals -->
+<button class="ai-fab" id="hub-fab-btn" style="bottom:152px;right:20px;background:linear-gradient(135deg,#f7971e,#ffd200);font-size:1.3em">🎯</button>
+<div class="chat-wrap" id="hub-wrap">
+  <div class="chat-header">
+    <h3>🎯 Профиль и прогресс</h3>
+    <button class="chat-close" id="hub-close-btn">✕</button>
+  </div>
+  <div class="chat-tabs">
+    <button class="chat-tab active" id="hubtab-q">🎯 Квесты</button>
+    <button class="hub-tab chat-tab" id="hubtab-t">🏆 Топ</button>
+    <button class="chat-tab" id="hubtab-h">📜 История</button>
+    <button class="chat-tab" id="hubtab-r">🤝 Рефы</button>
+  </div>
+  <div class="chat-body">
+    <div class="chat-page active" id="hubpage-q"><div id="quest-list" style="display:flex;flex-direction:column;gap:10px"></div></div>
+    <div class="chat-page" id="hubpage-t"><div id="top-info" style="font-size:.78em;color:#888;margin-bottom:8px"></div><div id="top-list" style="display:flex;flex-direction:column;gap:6px"></div></div>
+    <div class="chat-page" id="hubpage-h">
+      <svg id="rating-spark" viewBox="0 0 300 60" style="width:100%;height:60px;margin-bottom:10px"></svg>
+      <div id="hist-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+    <div class="chat-page" id="hubpage-r">
+      <div style="font-size:.82em;color:#aaa;margin-bottom:8px">Твой код — друзья вводят его и получают рамку «Дружба»:</div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <div id="my-ref-code" style="flex:1;text-align:center;font-size:1.5em;font-weight:900;letter-spacing:4px;color:var(--neon);border:2px dashed rgba(var(--neon-rgb),.4);border-radius:12px;padding:10px">— — —</div>
+        <button class="chat-add-btn" id="ref-copy-btn">📋</button>
+      </div>
+      <div style="font-size:.82em;color:#aaa;margin-bottom:8px">Есть код друга? Введи здесь:</div>
+      <div class="chat-input-row" style="margin-bottom:8px">
+        <input class="chat-input" id="ref-code-input" placeholder="ABC1234" maxlength="7" autocomplete="off" style="text-transform:uppercase;letter-spacing:2px">
+        <button class="chat-send" id="ref-apply-btn">OK</button>
+      </div>
+      <div id="ref-invited" style="font-size:.8em;color:#888"></div>
+    </div>
+  </div>
+</div>
+<!-- Spy guess overlay -->
+<div id="spy-guess-overlay" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.82);backdrop-filter:blur(6px);align-items:center;justify-content:center;flex-direction:column;padding:20px">
+  <div style="font-size:1.6em;font-weight:900;color:#ffd200;margin-bottom:6px">🕵️ Шанс шпиона!</div>
+  <div style="font-size:.9em;color:#ccc;margin-bottom:16px;text-align:center">Граждане выигрывают! Угадай слово и забери победу:<br><span style="color:#ffd200;font-weight:700" id="spy-guess-timer">30</span> сек</div>
+  <div id="spy-guess-options" style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px"></div>
+</div>
+<style>
+.emote-btn{font-size:1.5em;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:6px 10px;transition:transform .12s}
+.emote-btn:active{transform:scale(1.35);background:rgba(var(--neon-rgb),.18)}
+.fly-emote{position:absolute;font-size:2em;animation:flyUp 2.4s ease-out forwards;pointer-events:none}
+@keyframes flyUp{0%{transform:translateY(0) scale(.7);opacity:0}15%{opacity:1}100%{transform:translateY(-160px) scale(1.4);opacity:0}}
+.spy-opt{width:100%;padding:14px;border-radius:14px;border:2px solid rgba(255,210,0,.4);background:rgba(255,255,255,.05);color:#fff;font-size:1em;font-weight:700}
+.spy-opt:active{background:rgba(255,210,0,.25)}
+.hist-item{display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px 10px;font-size:.8em}
+.quest-item{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px}
+.top-row{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border-radius:10px;padding:6px 10px;font-size:.85em}
+.tourn-banner-btn{margin-top:6px;padding:6px 14px;border-radius:10px;border:2px solid #ffd200;background:rgba(255,215,0,.2);color:#ffd200;font-weight:800}
+</style>
 <!-- Chat & Friends -->
 <button class="ai-fab" id="chat-fab-btn" style="bottom:86px;right:20px;background:linear-gradient(135deg,#00b09b,#96c93d);font-size:1.4em">💬</button>
 <div class="chat-wrap" id="chat-wrap">
@@ -6336,7 +6748,9 @@ const ffs = (f.frame && typeof window.getProfileFrameStyle === 'function') ? win
     r_unreal:  { border: '3px solid #aa44ff', shadow: '0 0 22px rgba(170,68,255,.6)', name: 'Нереальный I', color: '#aa44ff' },
     r_legend:  { border: '3px solid #ff00ff', shadow: '0 0 25px rgba(255,0,255,.6)', name: 'Легенда', color: '#ff00ff' },
     r_immortal:{ border: '3px solid #00ffff', shadow: '0 0 25px rgba(0,255,255,.6)', name: 'Бессмертный', color: '#00ffff' },
-    r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)', name: 'Глобальная Элита', color: '#fff200' },
+        friendship:{ border: '3px solid #00d4aa', shadow: '0 0 16px rgba(0,212,170,.5)', name: 'Дружба', color: '#00d4aa' },
+    champion_t:{ border: '4px double #ffd700', shadow: '0 0 24px rgba(255,215,0,.8)', name: 'Чемпион', color: '#ffd700' },
+r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)', name: 'Глобальная Элита', color: '#fff200' },
   };
 
   let achData = { achievements: [], frames: ['default'], frame: 'default', stats: {} };
