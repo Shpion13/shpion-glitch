@@ -4738,7 +4738,14 @@ const OL = {
   rated: false,
 };
 
-const OL_DEFAULT_SERVER = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+function getWsUrl() {
+  const saved = localStorage.getItem('spy_server_url');
+  if (saved) return saved;
+  const isHttp = (location.protocol === 'https:' || location.protocol === 'http:') && location.host;
+  return isHttp ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host
+                : 'wss://amusing-grace-production-73ae.up.railway.app';
+}
+const OL_DEFAULT_SERVER = getWsUrl();
 
 function olShowStatus(text) {
   const el = document.getElementById('online-status');
@@ -5253,7 +5260,7 @@ document.getElementById('online-back-btn').addEventListener('click', () => {
     document.getElementById('login-nick').value = savedNick;
     document.getElementById('login-pass').value = savedPass;
     setTimeout(() => {
-      const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+      const wsUrl = getWsUrl();
       try {
         const authWs = new WebSocket(wsUrl);
         authWs.onopen = () => { authWs.send(JSON.stringify({ type: 'login_by_nick', nickname: savedNick, password: savedPass })); };
@@ -5304,7 +5311,7 @@ document.getElementById('online-back-btn').addEventListener('click', () => {
     if (pass !== pass2) { errEl.textContent = 'Пароли не совпадают'; errEl.style.display = 'block'; return; }
     document.getElementById('reg-btn').textContent = '⏳ Регистрация...';
     document.getElementById('reg-btn').disabled = true;
-    const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const wsUrl = getWsUrl();
     try {
       const regWs = new WebSocket(wsUrl);
       regWs.onopen = () => { regWs.send(JSON.stringify({ type: 'register', nickname: nick, password: pass })); };
@@ -5352,7 +5359,7 @@ document.getElementById('online-back-btn').addEventListener('click', () => {
     errEl.style.display = 'none';
     document.getElementById('login-btn').textContent = '⏳ Вход...';
     document.getElementById('login-btn').disabled = true;
-    const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const wsUrl = getWsUrl();
     try {
       const authWs = new WebSocket(wsUrl);
       authWs.onopen = () => { authWs.send(JSON.stringify({ type: 'login_by_nick', nickname: nick, password: pass })); };
@@ -5410,7 +5417,7 @@ function syncServerStats(serverStats) {
   saveStats(merged);
   localStorage.setItem('shpion_frame', serverStats.frame || localStorage.getItem('shpion_frame') || 'default');
   try {
-    const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const wsUrl = getWsUrl();
     const sws = new WebSocket(wsUrl);
     sws.onopen = () => sws.send(JSON.stringify({ type: 'get_achievements', nickname: serverStats.nickname || localStorage.getItem('spy_player_name') }));
     sws.onmessage = (e) => {
@@ -5654,7 +5661,7 @@ document.getElementById('profile-back-btn').addEventListener('click', () => {
     const nick = document.getElementById('tg-link-nick').value.trim();
     const pass = document.getElementById('tg-link-pass').value.trim();
     if (!nick || !pass) return;
-    const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const wsUrl = getWsUrl();
     try {
       const linkWs = new WebSocket(wsUrl);
       linkWs.onopen = () => { linkWs.send(JSON.stringify({ type: 'link_tg', nickname: nick, password: pass, tgId: 'pending' })); };
@@ -6033,7 +6040,7 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
 
   function chatConnect() {
     if (chatWs && chatWs.readyState <= 1) return;
-    const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const wsUrl = getWsUrl();
     try {
       chatWs = new WebSocket(wsUrl);
       chatWs.onopen = () => {
@@ -6242,7 +6249,7 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
 
   function achConnect() {
     if (achWs && achWs.readyState <= 1) return;
-    const wsUrl = localStorage.getItem('spy_server_url') || (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+    const wsUrl = getWsUrl();
     try {
       achWs = new WebSocket(wsUrl);
       achWs.onopen = () => { achWs.send(JSON.stringify({ type: 'get_achievements', nickname: localStorage.getItem('spy_player_name') || '' })); };
@@ -6367,7 +6374,7 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
 
   function aConnect() {
     try {
-      adminWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+      adminWs = new WebSocket(getWsUrl());
       adminWs.onopen = () => adminWs.send(JSON.stringify({ type: 'get_admin_data' }));
       adminWs.onmessage = e => {
         const d = JSON.parse(e.data);
