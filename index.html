@@ -4858,12 +4858,13 @@ function olRenderLobbyPlayers() {
   const list = document.getElementById('lobby-players');
   if (!list) return;
   list.innerHTML = '';
-  OL.players.forEach((p, i) => {
-    const div = document.createElement('div');
-    div.className = 'lobby-player';
-    const rank = getRank(p.rating || 0);
-    let html = '<span style="font-size:1.2em">' + (i === 0 ? '\ud83d\udc51' : '\ud83d\udc64') + '</span>' +
-      '<span class="lp-name">' + escapeHtml(p.name) + '</span>' +
+OL.players.forEach((p, i) => {
+const div = document.createElement('div');
+div.className = 'lobby-player';
+const rank = getRank(p.rating || 0);
+const fs = (p.frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(p.frame) : '';
+let html = '<span style="width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1.15em;flex-shrink:0;background:rgba(0,0,0,.3);' + fs + '">' + (i === 0 ? '\ud83d\udc51' : '\ud83d\udc64') + '</span>' +
+'<span class="lp-name">' + escapeHtml(p.name) + '</span>' +
       (p.muted ? '<span class="muted-badge">🔇</span>' : '') +
       '<span style="font-size:0.7em;color:' + rank.color + ';font-weight:700;margin-left:4px">' + rank.title + '</span>' +
       '<span style="font-size:0.65em;color:rgba(var(--neon-rgb),.4);margin-left:2px">(' + (p.rating || 0) + ')</span>';
@@ -4993,7 +4994,7 @@ function olHandle(msg) {
       break;
     }
     case 'chat': {
-      olAddChatMessage(msg.from, msg.text, msg.playerId);
+      olAddChatMessage(msg.from, msg.text, msg.playerId, msg.frame);
       break;
     }
     case 'speaker_done_ack': {
@@ -5115,7 +5116,8 @@ function olUpdateDiscPlayers() {
     const isSpeaker = OL.discussionOrder && OL.discussionOrder[OL.speakerIdx] === i;
     const isMe = i === OL.myRole.index;
     div.style.borderColor = isSpeaker ? 'var(--neon)' : '';
-    div.innerHTML = '<span style="font-size:1.1em">' + (isMe ? '🟢' : '') + '</span>' +
+    const fs = (p.frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(p.frame) : '';
+    div.innerHTML = '<span style="width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1em;flex-shrink:0;background:rgba(0,0,0,.3);' + fs + '">' + (isMe ? '🟢' : '👤') + '</span>' +
       '<span class="lp-name">' + escapeHtml(p.name) + '</span>' +
       (isSpeaker ? '<span style="color:var(--neon);font-size:0.75em">🎤</span>' : '');
     list.appendChild(div);
@@ -5133,14 +5135,15 @@ function olUpdateSpeaker(msg) {
     OL.isHost ? '' : 'none';
 }
 
-function olAddChatMessage(name, text, fromId) {
+function olAddChatMessage(name, text, fromId, frame) {
   const chat = document.getElementById('online-chat');
   if (!chat) return;
   const div = document.createElement('div');
   div.className = 'disc-msg';
   const now = new Date();
   const ts = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
-  div.innerHTML = '<span class="chat-name">' + escapeHtml(name) + '</span><span class="chat-time">' + ts + '</span><br>' + escapeHtml(text);
+  const cfs = (frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(frame) : '';
+  div.innerHTML = '<span style="width:24px;height:24px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.8em;background:rgba(0,0,0,.3);vertical-align:middle;margin-right:4px;' + cfs + '">👤</span><span class="chat-name">' + escapeHtml(name) + '</span><span class="chat-time">' + ts + '</span><br>' + escapeHtml(text);
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
 }
@@ -5155,7 +5158,8 @@ function olShowOnlineVote() {
     if (i === OL.myRole.index) return;
     const btn = document.createElement('button');
     btn.className = 'vote-player-btn';
-    btn.innerHTML = '<span style="font-size:1.2em">👤</span><span style="flex:1;text-align:left">' + escapeHtml(p.name) + '</span><span style="color:var(--neon)">▶</span>';
+    const vfs = (p.frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(p.frame) : '';
+    btn.innerHTML = '<span style="width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1.15em;flex-shrink:0;background:rgba(0,0,0,.3);' + vfs + '">👤</span><span style="flex:1;text-align:left">' + escapeHtml(p.name) + '</span><span style="color:var(--neon)">▶</span>';
     btn.addEventListener('click', () => {
       SFX.click();
       olSend({ type: 'vote', voteIndex: i });
@@ -5277,7 +5281,9 @@ function olShowOnlineResults(msg) {
     const pct = (v / maxV) * 100;
     const bar = document.createElement('div');
     bar.className = 'result-bar';
+    const rfs = (p.frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(p.frame) : '';
     bar.innerHTML =
+      '<span style="width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1em;flex-shrink:0;background:rgba(0,0,0,.3);' + rfs + '">👤</span>' +
       '<span style="flex:1;text-align:left">' + escapeHtml(p.name) + '</span>' +
       '<div style="flex:2;height:8px;background:var(--bg-card);border-radius:4px;overflow:hidden"><div class="r-bar-fill" style="width:' + pct + '%"></div></div>' +
       '<span style="width:30px;text-align:right;font-weight:700">' + v + '</span>';
@@ -5293,7 +5299,8 @@ function olShowOnlineResults(msg) {
     div.className = 'lobby-player';
     const isMe = OL.myRole && players[OL.myRole.index] && p.name === players[OL.myRole.index].name;
     const reportBtn = (!isMe && isGameOver) ? '<button class="report-btn" data-nick="' + escapeHtml(p.name) + '" title="Жалоба">🚩</button>' : '';
-    div.innerHTML = '<span style="font-size:1.1em">' + (isSpy ? '🕵️' : '👤') + '</span>' +
+    const efs = (p.frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(p.frame) : '';
+    div.innerHTML = '<span style="width:34px;height:34px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1.15em;flex-shrink:0;background:rgba(0,0,0,.3);' + efs + '">' + (isSpy ? '🕵️' : '👤') + '</span>' +
       '<span class="lp-name">' + escapeHtml(p.name) + ' — ' + (isSpy ? 'ШПИОН' : 'МИРНЫЙ') + '</span>' + reportBtn;
     rev.appendChild(div);
   });
@@ -6179,14 +6186,15 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
     }
   }
 
-  function appendChatMsg(m, isSelf) {
-    const el = document.createElement('div');
-    const time = new Date(m.time);
-    const ts = time.getHours().toString().padStart(2,'0') + ':' + time.getMinutes().toString().padStart(2,'0');
-    el.className = 'chat-msg ' + (m.nick === myChatNick ? 'self' : 'other');
-    el.innerHTML = '<div class="cm-nick">' + escHtml(m.nick) + '</div>' + escHtml(m.text) + '<div class="cm-time">' + ts + '</div>';
-    document.getElementById('chat-msgs').appendChild(el);
-  }
+function appendChatMsg(m, isSelf) {
+const el = document.createElement('div');
+const time = new Date(m.time);
+const ts = time.getHours().toString().padStart(2,'0') + ':' + time.getMinutes().toString().padStart(2,'0');
+el.className = 'chat-msg ' + (m.nick === myChatNick ? 'self' : 'other');
+const gfs = (m.frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(m.frame) : '';
+el.innerHTML = '<div class="cm-nick"><span style="width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.75em;background:rgba(0,0,0,.3);vertical-align:middle;margin-right:5px;' + gfs + '">👤</span>' + escHtml(m.nick) + (typeof m.rating === 'number' ? ' <span style="font-size:.75em;color:rgba(var(--neon-rgb),.5)">' + m.rating + '</span>' : '') + '</div>' + escHtml(m.text) + '<div class="cm-time">' + ts + '</div>';
+document.getElementById('chat-msgs').appendChild(el);
+}
 
   function scrollChat() { const c = document.getElementById('chat-msgs'); c.scrollTop = c.scrollHeight; }
   function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -6218,7 +6226,8 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
       list.forEach(f => {
         const item = document.createElement('div');
         item.className = 'friend-item';
-        item.innerHTML = '<span class="fi-avatar">👤</span><div class="fi-info"><div class="fi-nick"><span class="online-badge ' + (f.online ? 'on' : 'off') + '"></span>' + escHtml(f.nickname) + '</div><div class="fi-status ' + (f.online ? 'online' : 'offline') + '">' + (f.online ? 'В сети' : 'Не в сети') + '</div></div><div class="fi-actions">' + (f.online ? '<button class="fi-btn invite">🎮 Пригласить</button>' : '') + '<button class="fi-btn remove">✕</button></div>';
+const ffs = (f.frame && typeof window.getProfileFrameStyle === 'function') ? window.getProfileFrameStyle(f.frame) : '';
+        item.innerHTML = '<span class="fi-avatar" style="border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:rgba(0,0,0,.3);' + ffs + '">👤</span><div class="fi-info"><div class="fi-nick"><span class="online-badge ' + (f.online ? 'on' : 'off') + '"></span>' + escHtml(f.nickname) + (typeof f.rating === 'number' ? ' <span style="font-size:.75em;color:rgba(var(--neon-rgb),.5)">' + f.rating + '</span>' : '') + '</div><div class="fi-status ' + (f.online ? 'online' : 'offline') + '">' + (f.online ? 'В сети' : 'Не в сети') + '</div></div><div class="fi-actions">' + (f.online ? '<button class="fi-btn invite">🎮 Пригласить</button>' : '') + '<button class="fi-btn remove">✕</button></div>';
         const inviteBtn = item.querySelector('.invite');
         if (inviteBtn) inviteBtn.onclick = () => {
           const code = prompt('Код комнаты:');

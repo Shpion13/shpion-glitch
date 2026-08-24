@@ -554,8 +554,9 @@ function handleMessage(ws, msg) {
     const { pid } = findPlayer(ws);
     if (r && pid) {
       const nick = r.names.get(pid) || 'Игрок';
-      if (isMuted(nick)) { try { ws.send(JSON.stringify({ type: 'toast', text: '🔇 Ты в муте — чат недоступен' })); } catch(e) {} return; }
-      broadcast(r, { type: 'chat', from: nick, text: (msg.text || '').slice(0, 500), playerId: pid, time: Date.now() });
+      if (isMuted(nick)) { try { ws.send(JSON.stringify({ type: 'toast', text: '🔇 Ты в муте - чат недоступен' })); } catch(e) {} return; }
+      const acc = findAccountByNick(nick);
+      broadcast(r, { type: 'chat', from: nick, text: (msg.text || '').slice(0, 500), playerId: pid, time: Date.now(), frame: acc ? (acc.frame || 'default') : 'default' });
     }
   }
 
@@ -950,7 +951,7 @@ function updateAccountStats(nick, gameResult) {
   checkAchievements(acc);
   saveAccounts();
 
-  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0 };
+  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0, frame: acc.frame || 'default' };
 }
 
 function evalPlayerPerf(r, pid, idx, isSpy, roundsPlayed) {
@@ -1148,7 +1149,8 @@ const MAX_CHAT = 200;
 const onlineClients = new Map(); // ws -> { nickname, lastPing }
 
 function addChatMessage(nick, text) {
-  const msg = { id: crypto.randomUUID().slice(0, 8), nick, text: text.slice(0, 500), time: Date.now() };
+  const acc = findAccountByNick(nick);
+  const msg = { id: crypto.randomUUID().slice(0, 8), nick, text: text.slice(0, 500), time: Date.now(), frame: acc ? (acc.frame || 'default') : 'default', rating: acc && acc.stats ? (acc.stats.rating || 0) : 0 };
   chatMessages.push(msg);
   if (chatMessages.length > MAX_CHAT) chatMessages.splice(0, chatMessages.length - MAX_CHAT);
   for (const [ws] of onlineClients) {
@@ -1207,7 +1209,10 @@ function removeFriend(nick, target) {
 function getFriendsList(nick) {
   const list = friends.lists[nick] || [];
   const reqs = friends.requests[nick] || [];
-  return list.map(n => ({ nickname: n, online: isNickOnline(n) }));
+  return list.map(n => {
+    const a = findAccountByNick(n);
+    return { nickname: n, online: isNickOnline(n), frame: a ? (a.frame || 'default') : 'default', rating: a && a.stats ? (a.stats.rating || 0) : 0 };
+  });
 }
 
 function areFriends(a, b) {
