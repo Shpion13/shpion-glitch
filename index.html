@@ -1290,6 +1290,11 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
     <div class="fade-in fade-in-d1" id="online-result-sub" style="font-size:1em;opacity:.7;margin-bottom:12px"></div>
     <div class="result-list fade-in fade-in-d1" id="online-result-list"></div>
     <div class="result-reveal fade-in fade-in-d2" id="online-result-reveal"></div>
+    <div class="fade-in fade-in-d3" id="online-rating-block" style="display:none;margin-top:14px;padding:12px 16px;background:rgba(var(--neon-rgb),.06);border:1px solid rgba(var(--neon-rgb),.25);border-radius:14px;text-align:center">
+      <div id="online-rating-delta" style="font-size:1.4em;font-weight:900"></div>
+      <div id="online-rating-perf" style="font-size:.85em;opacity:.8;margin-top:4px"></div>
+      <div id="online-rating-calib" style="font-size:.8em;color:#ffd166;margin-top:4px"></div>
+    </div>
     <div class="fade-in fade-in-d3" id="online-results-buttons" style="margin-top:20px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
       <button class="btn btn-lg next-btn" id="online-next-round-btn" style="background:rgba(var(--neon-rgb),.1);border-color:rgba(var(--neon-rgb),.25);color:var(--text);display:none" data-i18n="results.next_round">▶ Следующий раунд</button>
       <button class="btn btn-lg next-btn" id="online-restart-btn" style="background:rgba(255,51,102,.08);border-color:rgba(255,51,102,.2);color:#ff6677" data-i18n="results.new_game">↺ Новая игра</button>
@@ -4989,6 +4994,12 @@ function olHandle(msg) {
       olShowOnlineResults(msg);
       break;
     }
+    case 'rating_results': {
+      OL.ratingResults = msg.results || [];
+      const blk = document.getElementById('online-rating-block');
+      if (blk && document.getElementById('screen-online-results').classList.contains('active')) renderMyRating();
+      break;
+    }
     case 'game_restarted': {
       OL.gameStarted = false;
       OL.round = 1;
@@ -5150,6 +5161,37 @@ function olShowOnlineTiebreaker(msg) {
   });
 }
 
+function plural(n, forms) {
+  const n10 = n % 10, n100 = n % 100;
+  if (n10 === 1 && n100 !== 11) return forms[0];
+  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return forms[1];
+  return forms[2];
+}
+
+function renderMyRating() {
+  const blk = document.getElementById('online-rating-block');
+  if (!blk) return;
+  const my = (OL.ratingResults || []).find(x => x.nickname === localStorage.getItem('spy_player_name'));
+  if (!my) { blk.style.display = 'none'; return; }
+  const dEl = document.getElementById('online-rating-delta');
+  const pEl = document.getElementById('online-rating-perf');
+  const cEl = document.getElementById('online-rating-calib');
+  const sign = my.delta >= 0 ? '+' : '';
+  const col = my.delta >= 0 ? '#00ff88' : '#ff6677';
+  dEl.innerHTML = '<span style="color:' + col + '">' + sign + my.delta + '</span> 📈 Рейтинг: <b>' + my.rating + '</b>';
+  pEl.textContent = my.perfLabel || '';
+  if (my.placing) {
+    cEl.textContent = '🎯 Калибровка рейтинга: осталось ' + my.placementLeft + ' ' + plural(my.placementLeft, ['игра', 'игры', 'игр']);
+    cEl.style.display = '';
+  } else if (my.calibrated && my.placementLeft === 0) {
+    cEl.textContent = '✅ Рейтинг откалиброван! Дальше очки зависят от силы соперников и твоей игры';
+    cEl.style.display = '';
+  } else {
+    cEl.style.display = 'none';
+  }
+  blk.style.display = 'block';
+}
+
 function olShowOnlineResults(msg) {
   showScreen('online-results');
   OL.civScore = msg.civScore || 0;
@@ -5230,6 +5272,7 @@ function olShowOnlineResults(msg) {
 
   if (isGameOver) {
     document.getElementById('online-restart-btn').style.display = '';
+    renderMyRating();
     document.getElementById('online-restart-btn').onclick = () => {
       SFX.nav();
       olSend({ type: 'restart_game' });
@@ -5585,17 +5628,22 @@ function renderProfileStats() {
   const rank = getRank(rating);
   const nextRank = RANKS[RANKS.indexOf(rank) + 1];
   const progress = nextRank ? ((rating - rank.min) / (nextRank.min - rank.min) * 100) : 100;
+  const calibrating = (s.games || 0) < 5;
+  const rankTitle = calibrating ? '🎯 Калибровка ' + s.games + '/5' : rank.title;
+  const rankColor = calibrating ? '#ffd166' : rank.color;
   const frameStyle = window.getProfileFrameStyle ? window.getProfileFrameStyle(localStorage.getItem('shpion_frame') || 'default') : '';
   const frameName = window.getProfileFrameName ? window.getProfileFrameName(localStorage.getItem('shpion_frame') || 'default') : '';
   const achCount = parseInt(localStorage.getItem('shpion_ach_count') || '0');
   el.innerHTML =
-    '<div style="text-align:center;padding:12px;margin-bottom:4px;border:2px solid ' + rank.color + ';border-radius:12px;background:rgba(0,0,0,.2)">' +
-      '<div style="font-size:1.4em;font-weight:900;color:' + rank.color + ';text-shadow:0 0 10px ' + rank.color + '66">' + rank.title + '</div>' +
+    '<div style="text-align:center;padding:12px;margin-bottom:4px;border:2px solid ' + rankColor + ';border-radius:12px;background:rgba(0,0,0,.2)">' +
+      '<div style="font-size:1.4em;font-weight:900;color:' + rankColor + ';text-shadow:0 0 10px ' + rankColor + '66">' + rankTitle + '</div>' +
       '<div style="font-size:0.8em;color:rgba(var(--neon-rgb),.5);margin:4px 0">' + t('profile.rating') + ': ' + rating + '</div>' +
-      '<div style="width:100%;height:6px;background:rgba(255,255,255,.1);border-radius:3px;margin-top:6px;overflow:hidden">' +
-        '<div style="width:' + progress + '%;height:100%;background:' + rank.color + ';border-radius:3px;transition:width .3s"></div>' +
-      '</div>' +
-      (nextRank ? '<div style="font-size:0.7em;color:rgba(var(--neon-rgb),.4);margin-top:4px">' + t('profile.next_rank') + ': ' + nextRank.title + ' (' + (nextRank.min - rating) + ')</div>' : '<div style="font-size:0.7em;color:' + rank.color + ';margin-top:4px">★ MAX</div>') +
+      (calibrating
+        ? '<div style="font-size:0.75em;color:#ffd166;margin-top:4px">Сыграй ещё ' + plural(5 - s.games, ['игру','игры','игр']) + ' — ИИ определит твой стартовый рейтинг</div>'
+        : '<div style="width:100%;height:6px;background:rgba(255,255,255,.1);border-radius:3px;margin-top:6px;overflow:hidden">' +
+          '<div style="width:' + progress + '%;height:100%;background:' + rank.color + ';border-radius:3px;transition:width .3s"></div>' +
+        '</div>' +
+        (nextRank ? '<div style="font-size:0.7em;color:rgba(var(--neon-rgb),.4);margin-top:4px">' + t('profile.next_rank') + ': ' + nextRank.title + ' (' + (nextRank.min - rating) + ')</div>' : '<div style="font-size:0.7em;color:' + rank.color + ';margin-top:4px">★ MAX</div>')) +
     '</div>' +
     '<div style="display:flex;justify-content:space-between"><span>🎮 ' + t('profile.stat_games') + '</span><span style="color:var(--neon)">' + s.games + '</span></div>' +
     '<div style="display:flex;justify-content:space-between"><span>✅ ' + t('profile.stat_wins') + '</span><span style="color:var(--neon)">' + s.wins + '</span></div>' +

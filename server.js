@@ -87,19 +87,14 @@ function resolveVotes(r) {
     broadcast(r, { type: 'vote_tiebreaker', tiedPlayers: tied, votes: arr, players, round: r.tb_round });
   } else {
     const mv = tied.length ? tied[0] : 0;
+    if (!Array.isArray(r.vote_history)) r.vote_history = [];
+    r.vote_history.push({ votes: Object.assign({}, r.votes), ejected: mv, wasSpy: si.includes(mv) });
     if (si.includes(mv)) r.civScore++; else r.spyScore++;
     r.game_started = false;
     const p = { votes: arr, mostVoted: mv, spyIndices: si, word: w, players, civScore: r.civScore, spyScore: r.spyScore };
     if (r.civScore >= 3 || r.spyScore >= 3) {
       broadcast(r, { type: 'game_over', ...p });
-      if (r.rated) {
-        const spyWon = r.spyScore >= 3;
-        r.players.forEach(pid => {
-          const name = r.names.get(pid);
-          const isSpy = si.includes(r.players.indexOf(pid));
-          updateAccountStats(name, { isSpy, spyWon });
-        });
-      }
+      finishRatedGame(r);
     }
     else broadcast(r, { type: 'vote_result', ...p, round: r.round });
   }
@@ -124,19 +119,14 @@ function resolveTB(r, tied) {
     broadcast(r, { type: 'vote_tiebreaker', tiedPlayers: nt, votes: arr, players, round: r.tb_round });
   } else {
     const mv = nt.length ? nt[0] : 0;
+    if (!Array.isArray(r.vote_history)) r.vote_history = [];
+    r.vote_history.push({ votes: Object.assign({}, r.tb_votes), ejected: mv, wasSpy: si.includes(mv) });
     if (si.includes(mv)) r.civScore++; else r.spyScore++;
     r.game_started = false;
     const p = { votes: arr, mostVoted: mv, spyIndices: si, word: w, players, civScore: r.civScore, spyScore: r.spyScore };
     if (r.civScore >= 3 || r.spyScore >= 3) {
       broadcast(r, { type: 'game_over', ...p });
-      if (r.rated) {
-        const spyWon = r.spyScore >= 3;
-        r.players.forEach(pid => {
-          const name = r.names.get(pid);
-          const isSpy = si.includes(r.players.indexOf(pid));
-          updateAccountStats(name, { isSpy, spyWon });
-        });
-      }
+      finishRatedGame(r);
     }
     else broadcast(r, { type: 'vote_result', ...p, round: r.round });
   }
@@ -431,6 +421,7 @@ function handleMessage(ws, msg) {
       round: 1, civScore: 0, spyScore: 0, banned: new Set(),
       votes: {}, tb_votes: {}, tied_players: [], tb_round: 0,
       disc_order: [], disc_idx: 0, game_word: '', game_mode: 'classic', spy_indices: new Set(), rated: false,
+      vote_history: [],
     };
     ws._me = me;
     ws._code = code;
@@ -636,6 +627,7 @@ function handleMessage(ws, msg) {
       r.tied_players = [];
       r.tb_votes = {};
       r.banned = new Set();
+      r.vote_history = [];
       broadcast(r, { type: 'game_restarted', players: plist(r) });
     }
   }
@@ -667,6 +659,7 @@ function handleMessage(ws, msg) {
         round: 1, civScore: 0, spyScore: 0, banned: new Set(),
         votes: {}, tb_votes: {}, tied_players: [], tb_round: 0,
         disc_order: [], disc_idx: 0, game_word: '', game_mode: 'classic', spy_indices: new Set(), rated: false,
+        vote_history: [],
       };
       ws._me = me;
       ws._code = code;
@@ -818,22 +811,110 @@ function getAccountStats(nick) {
 
 function updateAccountStats(nick, gameResult) {
   const acc = findAccountByNick(nick);
-  if (!acc) return;
+  if (!acc) return null;
   if (!acc.stats) acc.stats = { games:0, wins:0, losses:0, spyGames:0, spyWins:0, rating: 0 };
+
+  const PLACEMENT_GAMES = 5;
+  const won = gameResult.isSpy ? !!gameResult.spyWon : !gameResult.spyWon;
+  const perf = Math.max(0, Math.min(1, typeof gameResult.perf === 'number' ? gameResult.perf : 0.5));
+  const placingBefore = acc.stats.games < PLACEMENT_GAMES;
+
+  let delta;
+  if (placingBefore) {
+    delta = won ? 35 : -12;
+    delta = Math.round(delta * (0.85 + 0.4 * perf));
+    if (won) delta = Math.max(20, delta); else delta = Math.min(-8, delta);
+  } else {
+    const avgOpp = (typeof gameResult.avgOpp === 'number') ? gameResult.avgOpp : acc.stats.rating;
+    const diff = avgOpp - acc.stats.rating;
+    if (won) {
+      const base = Math.max(7, Math.min(30, 16 + Math.round(diff / 40)));
+      delta = Math.round(base * (0.8 + 0.5 * perf));
+      delta = Math.max(5, delta);
+    } else {
+      const base = Math.max(4, Math.min(18, 10 - Math.round(diff / 50)));
+      delta = -Math.max(3, Math.round(base * (1.15 - 0.45 * perf)));
+    }
+  }
+
   acc.stats.games++;
   if (gameResult.isSpy) {
     acc.stats.spyGames++;
-    if (gameResult.spyWon) { acc.stats.spyWins++; acc.stats.wins++; acc.stats.rating += 25; }
-    else { acc.stats.losses++; acc.stats.rating -= 15; }
+    if (gameResult.spyWon) { acc.stats.spyWins++; acc.stats.wins++; }
+    else { acc.stats.losses++; }
   } else {
-    if (!gameResult.spyWon) { acc.stats.wins++; acc.stats.rating += 15; }
-    else { acc.stats.losses++; acc.stats.rating -= 10; }
+    if (!gameResult.spyWon) { acc.stats.wins++; }
+    else { acc.stats.losses++; }
   }
+  acc.stats.rating = Math.max(0, acc.stats.rating + delta);
   if (acc.stats.rating < 0) acc.stats.rating = 0;
+
+  const placementLeft = Math.max(0, PLACEMENT_GAMES - acc.stats.games);
+  const calibrated = !placingBefore || placementLeft === 0;
+
+  let perfLabel;
+  if (perf >= 0.75) perfLabel = '🧠 ИИ: Блестящая игра!';
+  else if (perf >= 0.55) perfLabel = '🧠 ИИ: Хорошо сыграл';
+  else if (perf >= 0.35) perfLabel = '🧠 ИИ: Можно лучше';
+  else perfLabel = '🧠 ИИ: Слабовато';
+
   if (!acc.achievements) acc.achievements = [];
   if (!acc.frame) acc.frame = 'default';
   checkAchievements(acc);
   saveAccounts();
+
+  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0 };
+}
+
+function evalPlayerPerf(r, pid, idx, isSpy, roundsPlayed) {
+  const hist = Array.isArray(r.vote_history) ? r.vote_history : [];
+  let correctVotes = 0, totalVotes = 0, survivedRounds = 0, everEjected = false;
+  for (const h of hist) {
+    const myVote = h.votes[pid];
+    if (myVote !== undefined && myVote !== null) {
+      totalVotes++;
+      if ([...r.spy_indices].includes(myVote)) correctVotes++;
+    }
+    if (h.ejected === idx) everEjected = true; else survivedRounds++;
+  }
+  let score = 0;
+  if (isSpy) {
+    const surviveRatio = roundsPlayed > 0 ? Math.min(1, survivedRounds / roundsPlayed) : 0.5;
+    score += surviveRatio * 0.6;
+    if (!everEjected) score += 0.15;
+  } else {
+    const accuracy = totalVotes > 0 ? correctVotes / totalVotes : 0.5;
+    score += accuracy * 0.65;
+    if (accuracy >= 0.5 && totalVotes >= 2) score += 0.1;
+  }
+  return Math.max(0, Math.min(1, score));
+}
+
+function finishRatedGame(r) {
+  if (!r.rated) return;
+  const si = [...r.spy_indices];
+  const spyWon = r.spyScore >= 3;
+  const roundsPlayed = (Array.isArray(r.vote_history) ? r.vote_history : []).length;
+  const results = [];
+  r.players.forEach(pid => {
+    const name = r.names.get(pid);
+    if (!name) return;
+    const idx = r.players.indexOf(pid);
+    const isSpy = si.includes(idx);
+    const perf = evalPlayerPerf(r, pid, idx, isSpy, roundsPlayed);
+
+    let oppSum = 0, oppCount = 0;
+    r.players.forEach(opid => {
+      if (opid === pid) return;
+      const rr = r.ratings.get(opid);
+      if (typeof rr === 'number') { oppSum += rr; oppCount++; }
+    });
+    const avgOpp = oppCount ? Math.round(oppSum / oppCount) : undefined;
+
+    const res = updateAccountStats(name, { isSpy, spyWon, perf, avgOpp });
+    if (res) results.push(res);
+  });
+  if (results.length) broadcast(r, { type: 'rating_results', results });
 }
 
 // === ACHIEVEMENTS & FRAMES ===
