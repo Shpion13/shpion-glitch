@@ -490,6 +490,9 @@ body.aqua-theme{
 .disc-msg{padding:4px 0;font-size:0.82em;line-height:1.3;word-break:break-word}
 .disc-msg .chat-name{color:var(--neon);font-weight:700}
 .disc-msg .chat-time{color:rgba(var(--neon-rgb),.3);font-size:0.8em;margin-left:6px}
+.report-btn{background:none;border:none;font-size:1em;cursor:pointer;opacity:.5;padding:2px 8px;margin-left:auto}
+.report-btn:hover{opacity:1}
+.muted-badge{color:#ff6677;font-size:.75em;margin-left:4px}
 .lobby-player{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px}
 .lobby-player .lp-name{flex:1;text-align:left;font-weight:600}
 .lobby-player .lp-host{font-size:0.7em;color:var(--neon);opacity:.7}
@@ -792,6 +795,8 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
 .admin-btn{padding:5px 9px;border-radius:8px;font-size:0.72em;border:none;cursor:pointer;font-weight:700}
 .ab-ban{background:rgba(255,51,102,.15);color:#ff6677}
 .ab-unban{background:rgba(0,255,136,.15);color:#00ff88}
+.ab-mute{background:rgba(255,209,102,.15);color:#ffd166}
+.ab-unmute{background:rgba(0,255,136,.15);color:#00ff88}
 .ab-kick{background:rgba(255,204,0,.12);color:#ffcc00}
 .admin-actions-row{display:flex;gap:8px;padding:6px 12px}
 .admin-stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px 12px}
@@ -4843,6 +4848,7 @@ function olRenderLobbyPlayers() {
     const rank = getRank(p.rating || 0);
     let html = '<span style="font-size:1.2em">' + (i === 0 ? '\ud83d\udc51' : '\ud83d\udc64') + '</span>' +
       '<span class="lp-name">' + escapeHtml(p.name) + '</span>' +
+      (p.muted ? '<span class="muted-badge">🔇</span>' : '') +
       '<span style="font-size:0.7em;color:' + rank.color + ';font-weight:700;margin-left:4px">' + rank.title + '</span>' +
       '<span style="font-size:0.65em;color:rgba(var(--neon-rgb),.4);margin-left:2px">(' + (p.rating || 0) + ')</span>';
     if (i === 0) {
@@ -5012,6 +5018,10 @@ function olHandle(msg) {
     }
     case 'error': {
       olShowStatus('⚠️ ' + msg.message);
+      break;
+    }
+    case 'toast': {
+      if (typeof window.admToast === 'function') window.admToast(msg.text || '');
       break;
     }
     case 'voice_offer': {
@@ -5265,10 +5275,22 @@ function olShowOnlineResults(msg) {
     const isSpy = spyIndices.indexOf(i) !== -1;
     const div = document.createElement('div');
     div.className = 'lobby-player';
+    const isMe = OL.myRole && players[OL.myRole.index] && p.name === players[OL.myRole.index].name;
+    const reportBtn = (!isMe && isGameOver) ? '<button class="report-btn" data-nick="' + escapeHtml(p.name) + '" title="Жалоба">🚩</button>' : '';
     div.innerHTML = '<span style="font-size:1.1em">' + (isSpy ? '🕵️' : '👤') + '</span>' +
-      '<span class="lp-name">' + escapeHtml(p.name) + ' — ' + (isSpy ? 'ШПИОН' : 'МИРНЫЙ') + '</span>';
+      '<span class="lp-name">' + escapeHtml(p.name) + ' — ' + (isSpy ? 'ШПИОН' : 'МИРНЫЙ') + '</span>' + reportBtn;
     rev.appendChild(div);
   });
+  if (isGameOver) {
+    rev.querySelectorAll('.report-btn').forEach(b => {
+      b.onclick = () => {
+        const nick = b.dataset.nick;
+        const reason = prompt('Жалоба на ' + nick + '. Укажи причину:', '');
+        if (reason === null) return;
+        olSend({ type: 'report_player', target: nick, reason: reason || 'без причины' });
+      };
+    });
+  }
 
   if (isGameOver) {
     document.getElementById('online-restart-btn').style.display = '';
@@ -6462,11 +6484,13 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
       el.className = 'admin-player' + (p.banned ? ' banned' : '');
       const isOn = onlineSet.has(p.nickname);
       el.innerHTML =
-        '<div class="ap-info"><div class="ap-nick">' + esc(p.nickname) + '</div>' +
-        '<div class="ap-stats">🎮' + (p.stats.games||0) + ' 🏆' + (p.stats.wins||0) + ' 📈' + (p.stats.rating||0) + ' 🏅' + p.achCount + '/29</div></div>' +
+        '<div class="ap-info"><div class="ap-nick">' + esc(p.nickname) + (p.muted ? ' 🔇' : '') + '</div>' +
+        '<div class="ap-stats">🎮' + (p.stats.games||0) + ' 🏆' + (p.stats.wins||0) + ' 📈' + (p.stats.rating||0) + ' 🏅' + p.achCount + '/29' + (p.reports ? ' 🚩' + p.reports : '') + '</div></div>' +
         '<span class="ap-badge ' + (isOn ? 'on' : 'off') + '">' + (isOn ? '● онлайн' : '○ оффлайн') + '</span>' +
         (p.banned ? '<button class="admin-btn ab-unban" data-act="unban" data-nick="' + esc(p.nickname) + '">✅ Разбан</button>' :
                     '<button class="admin-btn ab-ban" data-act="ban" data-nick="' + esc(p.nickname) + '">🚫 Бан</button>') +
+        (p.muted ? '<button class="admin-btn ab-unmute" data-act="unmute" data-nick="' + esc(p.nickname) + '">🔊 Размут</button>' :
+                   '<button class="admin-btn ab-mute" data-act="mute" data-nick="' + esc(p.nickname) + '">🔇 Мут</button>') +
         '<button class="admin-btn ab-kick" data-act="kick" data-nick="' + esc(p.nickname) + '">👢 Кик</button>';
       list.appendChild(el);
     });

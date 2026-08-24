@@ -57,7 +57,7 @@ function plist(r) {
   return r.players.map(p => {
     const name = r.names.get(p);
     const acc = findAccountByNick(name);
-    return { name, id: p, rating: r.ratings.get(p) || 0, frame: acc ? (acc.frame || 'default') : 'default' };
+    return { name, id: p, rating: r.ratings.get(p) || 0, frame: acc ? (acc.frame || 'default') : 'default', muted: isMuted(name) };
   });
 }
 
@@ -207,6 +207,8 @@ function handleMessage(ws, msg) {
       nickname: a.nickname,
       stats: a.stats || {},
       banned: isBanned(a.nickname),
+      muted: isMuted(a.nickname),
+      reports: reports.list.filter(rp => rp.target.toLowerCase() === a.nickname.toLowerCase()).length,
       frame: a.frame || 'default',
       achCount: (a.achievements || []).length
     }));
@@ -240,6 +242,28 @@ function handleMessage(ws, msg) {
     delete banned[(msg.target || '').toLowerCase()];
     saveBanned();
     ws.send(JSON.stringify({ type: 'toast', text: '✅ ' + msg.target + ' разбанен' }));
+    return;
+  }
+
+  if (t === 'admin_mute') {
+    if (!adminCheck()) return;
+    const nick = (msg.target || '').trim();
+    if (!findAccountByNick(nick)) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Аккаунт не найден' })); return; }
+    if (isAdminNick(nick.toLowerCase())) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Нельзя мутить админа' })); return; }
+    setMuted(nick, msg.by || 'admin');
+    for (const [c, info] of onlineClients) {
+      if (info.nickname && info.nickname.toLowerCase() === nick.toLowerCase()) {
+        try { c.send(JSON.stringify({ type: 'toast', text: '🔇 Ты получил мут от администрации' })); } catch(e) {}
+      }
+    }
+    ws.send(JSON.stringify({ type: 'toast', text: '🔇 ' + nick + ' замучен' }));
+    return;
+  }
+
+  if (t === 'admin_unmute') {
+    if (!adminCheck()) return;
+    unsetMuted((msg.target || '').trim());
+    ws.send(JSON.stringify({ type: 'toast', text: '🔊 ' + msg.target + ' размучен' }));
     return;
   }
 
@@ -339,6 +363,7 @@ function handleMessage(ws, msg) {
   if (t === 'chat_send') {
     const info = onlineClients.get(ws);
     if (info && msg.text) {
+      if (isMuted(info.nickname)) { try { ws.send(JSON.stringify({ type: 'toast', text: '🔇 Ты в муте — чат недоступен' })); } catch(e) {} return; }
       addChatMessage(info.nickname, msg.text.slice(0, 500));
     }
     return;
@@ -433,9 +458,13 @@ function handleMessage(ws, msg) {
     const pw = (msg.password || '').trim();
     if (!rooms[code]) { ws.send(JSON.stringify({ type: 'error', message: 'Комната не найдена' })); return; }
     const r = rooms[code];
-    if (r.game_started) { ws.send(JSON.stringify({ type: 'error', message: 'Игра уже идёт' })); return; }
-    if (r.players.length >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Комната заполнена' })); return; }
-    if (r.password && pw !== r.password) { ws.send(JSON.stringify({ type: 'error', message: 'Неверный пароль' })); return; }
+    const joinName = String(msg.name || '').trim();
+    const isAdminJoin = isAdminNick(joinName.toLowerCase());
+    const isFriendJoin = !isAdminJoin && r.players.some(pid => { const n = r.names.get(pid); return n && areFriends(n, joinName); });
+    if (!isAdminJoin && r.game_started) { ws.send(JSON.stringify({ type: 'error', message: 'Игра уже идёт' })); return; }
+    if (!isAdminJoin && r.players.length >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Комната заполнена' })); return; }
+    if (r.password && pw !== r.password && !isFriendJoin && !isAdminJoin) { ws.send(JSON.stringify({ type: 'error', message: 'Неверный пароль' })); return; }
+    if (isBanned(joinName)) { ws.send(JSON.stringify({ type: 'error', message: '🚫 Аккаунт забанен', banned: true })); return; }
     const me = crypto.randomUUID();
     if (r.banned.has(me)) { ws.send(JSON.stringify({ type: 'error', message: 'Вы заблокированы' })); return; }
     r.players.push(me);
@@ -513,7 +542,19 @@ function handleMessage(ws, msg) {
   else if (t === 'chat') {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);
-    if (r && pid) broadcast(r, { type: 'chat', from: r.names.get(pid) || 'Игрок', text: (msg.text || '').slice(0, 500), playerId: pid, time: Date.now() });
+    if (r && pid) {
+      const nick = r.names.get(pid) || 'Игрок';
+      if (isMuted(nick)) { try { ws.send(JSON.stringify({ type: 'toast', text: '🔇 Ты в муте — чат недоступен' })); } catch(e) {} return; }
+      broadcast(r, { type: 'chat', from: nick, text: (msg.text || '').slice(0, 500), playerId: pid, time: Date.now() });
+    }
+  }
+
+  else if (t === 'report_player') {
+    const info = onlineClients.get(ws);
+    if (info && info.nickname) {
+      const res = addReport(info.nickname, String(msg.target || '').trim(), String(msg.reason || '').trim());
+      try { ws.send(JSON.stringify({ type: 'toast', text: res.ok ? '✅ Жалоба отправлена администрации' : '❌ Не удалось отправить жалобу' })); } catch(e) {}
+    }
   }
 
   else if (t === 'start_discussion') {
@@ -757,6 +798,42 @@ try { banned = JSON.parse(fs.readFileSync(bannedPath, 'utf8')); } catch(e) { ban
 function saveBanned() { try { fs.writeFileSync(bannedPath, JSON.stringify(banned, null, 2)); } catch(e) {} }
 function isAdminNick(nick) { return nick && ADMIN_NICKS.includes(nick.toLowerCase()); }
 function isBanned(nick) { return !!(nick && banned[nick.toLowerCase()]); }
+
+const mutedPath = require('path').join(DATA_DIR, 'muted.json');
+let mutedNicks = {};
+try { mutedNicks = JSON.parse(fs.readFileSync(mutedPath, 'utf8')); } catch(e) { mutedNicks = {}; }
+function saveMuted() { try { fs.writeFileSync(mutedPath, JSON.stringify(mutedNicks, null, 2)); } catch(e) {} }
+function isMuted(nick) { return !!(nick && mutedNicks[nick.toLowerCase()]); }
+function setMuted(nick, by) {
+  if (!nick) return;
+  const k = nick.toLowerCase();
+  if (isAdminNick(k)) return;
+  mutedNicks[k] = { by: by || 'admin', at: new Date().toISOString() };
+  saveMuted();
+}
+function unsetMuted(nick) { if (nick && mutedNicks[nick.toLowerCase()]) { delete mutedNicks[nick.toLowerCase()]; saveMuted(); } }
+
+const reportsPath = require('path').join(DATA_DIR, 'reports.json');
+let reports = { list: [] };
+try { reports = JSON.parse(fs.readFileSync(reportsPath, 'utf8')); } catch(e) { reports = { list: [] }; }
+if (!Array.isArray(reports.list)) reports.list = [];
+function saveReports() { try { fs.writeFileSync(reportsPath, JSON.stringify(reports, null, 2)); } catch(e) {} }
+function addReport(by, target, reason) {
+  if (!target || target === by) return { ok: false };
+  const acc = findAccountByNick(target);
+  if (!acc) return { ok: false };
+  reports.list.push({ by, target, reason: String(reason || '').slice(0, 300), at: new Date().toISOString() });
+  if (reports.list.length > 1000) reports.list.splice(0, reports.list.length - 1000);
+  saveReports();
+  const count = reports.list.filter(r => r.target.toLowerCase() === target.toLowerCase()).length;
+  for (const [ws2, info2] of onlineClients) {
+    if (isAdminNick(info2.nickname)) { try { ws2.send(JSON.stringify({ type: 'toast', text: '🚩 Жалоба на ' + target + ': ' + (reason || 'без причины') })); } catch(e) {} }
+  }
+  if (tgBot && ADMIN_ID_INIT) {
+    tgBot.sendMessage(ADMIN_ID_INIT, '🚩 <b>Новая жалоба</b>\nОт: ' + by + '\nНа: ' + target + '\nПричина: ' + (reason || '—') + '\nВсего жалоб на игрока: ' + count, { parse_mode: 'HTML' }).catch(() => {});
+  }
+  return { ok: true, total: count };
+}
 function broadcastAll(msg, excl) {
   const d = JSON.stringify(msg);
   for (const [c] of onlineClients) {
@@ -1121,6 +1198,13 @@ function getFriendsList(nick) {
   const list = friends.lists[nick] || [];
   const reqs = friends.requests[nick] || [];
   return list.map(n => ({ nickname: n, online: isNickOnline(n) }));
+}
+
+function areFriends(a, b) {
+  if (!a || !b) return false;
+  const la = friends.lists[String(a)] || [];
+  const lb = friends.lists[String(b)] || [];
+  return la.includes(b) || lb.includes(a);
 }
 
 function getFriendRequests(nick) {
