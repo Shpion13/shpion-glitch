@@ -4748,14 +4748,17 @@ const OL = {
   rated: false,
 };
 
+const OL_SERVER_PRIMARY = 'wss://shpiongame.ru';
+const OL_SERVER_FALLBACK = 'wss://amusing-grace-production-73ae.up.railway.app';
 function getWsUrl() {
   const saved = localStorage.getItem('spy_server_url');
   if (saved) return saved;
   const isHttp = (location.protocol === 'https:' || location.protocol === 'http:') && location.host;
   return isHttp ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host
-                : 'wss://amusing-grace-production-73ae.up.railway.app';
+                : OL_SERVER_PRIMARY;
 }
 const OL_DEFAULT_SERVER = getWsUrl();
+let olFallbackUsed = false;
 
 function olShowStatus(text) {
   const el = document.getElementById('online-status');
@@ -4767,15 +4770,27 @@ function olGetServerUrl() {
   return (input && input.value.trim()) || OL_DEFAULT_SERVER;
 }
 
-function olConnect(name, onOpen) {
-  const url = olGetServerUrl();
+function olConnect(name, onOpen, urlOverride) {
+  const url = urlOverride || olGetServerUrl();
   if (!name) { olShowStatus(t('online.your_name')); return; }
   if (!url) { olShowStatus(t('online.enter_server')); return; }
 
+  let openedOnce = false;
   try { if (OL.ws) OL.ws.close(); } catch(e) {}
   OL.ws = new WebSocket(url);
 
+  const tryFallback = () => {
+    if (openedOnce || urlOverride || olFallbackUsed) return;
+    if (localStorage.getItem('spy_server_url')) return;
+    olFallbackUsed = true;
+    const alt = (url === OL_SERVER_PRIMARY) ? OL_SERVER_FALLBACK : OL_SERVER_PRIMARY;
+    olShowStatus('\u23f3 \u041f\u0440\u043e\u0431\u0443\u044e \u0437\u0430\u043f\u0430\u0441\u043d\u043e\u0439 \u0441\u0435\u0440\u0432\u0435\u0440...');
+    setTimeout(() => olConnect(name, onOpen, alt), 800);
+  };
+
   OL.ws.onopen = () => {
+    openedOnce = true;
+    olFallbackUsed = false;
     OL.connected = true;
     olShowStatus('');
     if (onOpen) onOpen();
@@ -4786,6 +4801,7 @@ function olConnect(name, onOpen) {
   };
   OL.ws.onerror = () => {
     olShowStatus('\u274c \u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f');
+    tryFallback();
   };
   OL.ws.onmessage = (e) => {
     try { olHandle(JSON.parse(e.data)); } catch(err) {}
