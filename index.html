@@ -771,7 +771,7 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
 .ach-item .ach-frame-tag{font-size:0.7em;padding:3px 8px;border-radius:8px;font-weight:700}
 .ach-item.unlocked .ach-frame-tag{background:rgba(var(--neon-rgb),.15);color:var(--neon)}
 .ach-item:not(.unlocked) .ach-frame-tag{background:rgba(255,255,255,.05);color:rgba(255,255,255,.2)}
-.frame-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px 14px}
+.frame-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:10px 14px;overflow-y:auto;flex:1;align-content:start;-webkit-overflow-scrolling:touch}
 .frame-card{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 8px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);cursor:pointer;transition:all .2s}
 .frame-card.active{border-color:var(--neon);background:rgba(var(--neon-rgb),.1)}
 .frame-card.locked{opacity:.35;pointer-events:none}
