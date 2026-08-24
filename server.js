@@ -40,7 +40,11 @@ function shuffle(a) {
 }
 
 function findRoom(ws) {
-  for (const r of Object.values(rooms)) if (r.conns.has(ws)) return r;
+  for (const r of Object.values(rooms)) {
+    for (const [, c] of r.conns) {
+      if (c === ws) return r;
+    }
+  }
   return null;
 }
 
@@ -465,6 +469,7 @@ function handleMessage(ws, msg) {
     if (!isAdminJoin && r.players.length >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Комната заполнена' })); return; }
     if (r.password && pw !== r.password && !isFriendJoin && !isAdminJoin) { ws.send(JSON.stringify({ type: 'error', message: 'Неверный пароль' })); return; }
     if (isBanned(joinName)) { ws.send(JSON.stringify({ type: 'error', message: '🚫 Аккаунт забанен', banned: true })); return; }
+    if (r.bannedNames && r.bannedNames.has(joinName.toLowerCase())) { ws.send(JSON.stringify({ type: 'error', message: 'Вы были исключены из этой комнаты' })); return; }
     const me = crypto.randomUUID();
     if (r.banned.has(me)) { ws.send(JSON.stringify({ type: 'error', message: 'Вы заблокированы' })); return; }
     r.players.push(me);
@@ -483,11 +488,16 @@ function handleMessage(ws, msg) {
     if (!r || pid !== r.host) return;
     const tgt = msg.playerId;
     if (tgt && r.players.includes(tgt) && tgt !== pid) {
+      const kickedNick = r.names.get(tgt) || msg.kickedName || '';
       r.players = r.players.filter(p => p !== tgt);
       r.names.delete(tgt);
       const kws = r.conns.get(tgt);
       r.conns.delete(tgt);
       r.banned.add(tgt);
+      if (kickedNick) {
+        if (!r.bannedNames) r.bannedNames = new Set();
+        r.bannedNames.add(String(kickedNick).toLowerCase());
+      }
       broadcast(r, { type: 'player_kicked', players: plist(r), kickedName: msg.kickedName || '' });
       if (kws) { try { kws.send(JSON.stringify({ type: 'kicked', message: 'Вы удалены из комнаты' })); kws.close(); } catch (e) {} }
     }
@@ -848,7 +858,7 @@ function allRoomConns() {
 
 function findAccountByNick(nick) {
   for (const [id, a] of Object.entries(accounts)) {
-    if (a.nickname.toLowerCase() === nick.toLowerCase()) return { id, ...a };
+    if (a.nickname.toLowerCase() === nick.toLowerCase()) { a.id = id; return a; }
   }
   return null;
 }
