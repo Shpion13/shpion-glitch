@@ -4742,7 +4742,6 @@ $$('.sound-toggle').forEach(b => b.classList.toggle('active', b.dataset.sound ==
 </script>
 
 <script>
-function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 // === ONLINE MODE ===
 const OL = {
   ws: null,
@@ -5045,7 +5044,7 @@ function olHandle(msg) {
       OL.myId = 'spec';
       OL.players = msg.players || [];
       showToast('👀 Наблюдаешь за ' + msg.roomCode);
-      showScreen('screen-online-disc');
+      showScreen('online-disc');
       break;
     }
     case 'rating_results': {
@@ -5076,7 +5075,7 @@ function olHandle(msg) {
     case 'quick_found': {
       OL.myId = msg.playerId;
       OL.players = msg.players;
-      showScreen('screen-lobby');
+      showScreen('lobby');
       if (typeof olRenderLobbyPlayers === 'function') olRenderLobbyPlayers();
       olShowStatus(msg.created ? '⚡ Комната создана, ждём игроков...' : '⚡ Ты в комнате ' + msg.roomCode);
       break;
@@ -5307,7 +5306,7 @@ function hubRefresh() {
   olSend({ type: 'get_weekly_top' });
 }
 
-const AVATARS = ['🕵️','😎','🤖','💀','👻','🤡','🎃','🦊','🐱','🐶','🦁','🐸','👑','🔥','💎','🌟','🎭','🎪','🦄','🐙','🧠','❤️','🎯','🎲','🔮'];
+const HUB_AVATARS = ['🕵️','😎','🤖','💀','👻','🤡','🎃','🦊','🐱','🐶','🦁','🐸','👑','🔥','💎','🌟','🎭','🎪','🦄','🐙','🧠','❤️','🎯','🎲','🔮'];
 function initAvatarPicker() {
   const picker = document.getElementById('avatar-picker');
   if (!picker) return;
@@ -5315,7 +5314,7 @@ function initAvatarPicker() {
   const cur = localStorage.getItem('shpion_avatar') || '🕵️';
   const display = document.getElementById('hub-avatar-display');
   if (display) display.textContent = cur;
-  AVATARS.forEach(av => {
+  HUB_AVATARS.forEach(av => {
     const btn = document.createElement('div');
     btn.className = 'avatar-opt' + (av === cur ? ' sel' : '');
     btn.textContent = av;
@@ -5534,10 +5533,10 @@ function shareResultCard() {
 function olShowRole() {
   const r = OL.myRole;
   if (!r) return;
-  document.getElementById('online-role-emoji').textContent = r.isSpy ? '🕵️' : '🕵️';
+  document.getElementById('online-role-emoji').textContent = r.isSpy ? '🕵️' : '👤';
   document.getElementById('online-role-banner').textContent = r.isSpy
     ? t('ready.spy_role')
-    : t('results.spy_win').split('!')[0] + '!';
+    : '👤 Мирный игрок';
 
   const wordEl = document.getElementById('online-role-word');
   const subEl = document.getElementById('online-role-sub');
@@ -5577,6 +5576,7 @@ function olStartOnlineDiscussion() {
 }
 
 function olUpdateDiscPlayers() {
+  if (!OL.myRole) return;
   const list = document.getElementById('online-disc-players');
   if (!list) return;
   list.innerHTML = '';
@@ -5595,6 +5595,7 @@ function olUpdateDiscPlayers() {
 }
 
 function olUpdateSpeaker(msg) {
+  if (!OL.myRole) return;
   const pi = msg.playerIndex !== undefined ? msg.playerIndex : (OL.discussionOrder ? OL.discussionOrder[OL.speakerIdx] : 0);
   const name = OL.players[pi] ? OL.players[pi].name : '?';
   const isMe = pi === OL.myRole.index;
@@ -5619,11 +5620,14 @@ function olAddChatMessage(name, text, fromId, frame) {
 }
 
 function olShowOnlineVote() {
+  if (!OL.myRole) return;
   showScreen('online-vote');
   document.getElementById('online-vote-wait').style.display = 'none';
   document.getElementById('online-vote-status').textContent = t('online.vote_title');
   const svr = document.getElementById('skip-vote-row');
   if (svr) { svr.style.display = 'block'; document.getElementById('skip-vote-info').textContent = ''; }
+  const sbtn = document.getElementById('skip-vote-btn');
+  if (sbtn) { sbtn.disabled = false; sbtn.textContent = '⏭️ Пропустить раунд'; }
   const list = document.getElementById('online-vote-players');
   list.innerHTML = '';
   OL.players.forEach((p, i) => {
@@ -5647,6 +5651,7 @@ function olShowOnlineVote() {
 }
 
 function olShowOnlineTiebreaker(msg) {
+  if (!OL.myRole) return;
   showScreen('online-vote');
   document.getElementById('online-vote-status').textContent = t('tiebreaker.title') + ' (' + t('tiebreaker.desc') + ')';
   const list = document.getElementById('online-vote-players');
@@ -5735,11 +5740,11 @@ function olShowOnlineResults(msg) {
     const name = players[mostVoted] ? players[mostVoted].name : '?';
     if (revealed) {
       if (OL.myRole && !OL.myRole.isSpy) trackSpyCaught();
-      banner.textContent = t('results.spy_caught', { n: spyIndices.filter(s => players[s] && OL.alive.indexOf(s) !== -1).length - 1 });
+      banner.textContent = t('results.spy_caught', spyIndices.filter(s => players[s] && OL.alive.indexOf(s) !== -1).length - 1);
       banner.style.color = '#00ff88';
       emoji.textContent = '🎉';
     } else {
-      banner.textContent = t('results.eliminated', { name: name });
+      banner.textContent = t('results.eliminated', name);
       banner.style.color = '#ff6677';
       emoji.textContent = '😢';
     }
@@ -6668,7 +6673,7 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
 .tourn-banner-btn{margin-top:6px;padding:6px 14px;border-radius:10px;border:2px solid #ffd200;background:rgba(255,215,0,.2);color:#ffd200;font-weight:800}
 .frame-anim{animation:frPulse 3s ease-in-out infinite}
 @keyframes frPulse{0%,100%{filter:brightness(1) saturate(1)}50%{filter:brightness(1.4) saturate(1.5)}}
-.frame-aurora{background:linear-gradient(135deg,#00c6fb,#005bea,#d500f9)!important;animation:frAurora 4s linear infinite}
+.frame-aurora{background:linear-gradient(135deg,#00c6fb,#005bea,#d500f9)!important;background-size:200% 200%;animation:frAurora 4s linear infinite}
 @keyframes frAurora{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
 .frame-rose{box-shadow:0 0 12px rgba(255,105,135,.5),inset 0 0 12px rgba(255,105,135,.2)!important;animation:frRose 2s ease-in-out infinite}
 @keyframes frRose{0%,100%{box-shadow:0 0 12px rgba(255,105,135,.5)}50%{box-shadow:0 0 24px rgba(255,105,135,.8)}}
@@ -7057,7 +7062,7 @@ r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)',
   window.getProfileFrameStyle = function(frameId) {
     const f = FRAME_DATA[frameId] || FRAME_DATA.default;
     let css = 'border:' + f.border + ';box-shadow:' + f.shadow;
-    if (frameId === 's_aurora') css += ';animation:frAurora 4s linear infinite;background:linear-gradient(135deg,#00c6fb,#005bea,#d500f9)';
+    if (frameId === 's_aurora') css += ';animation:frAurora 4s linear infinite;background:linear-gradient(135deg,#00c6fb,#005bea,#d500f9);background-size:200% 200%';
     else if (frameId === 's_rose') css += ';animation:frRose 2s ease-in-out infinite';
     else if (frameId === 's_ice') css += ';animation:frIce 3s ease-in-out infinite';
     else if (frameId === 's_royal') css += ';animation:frRoyal 2.5s ease-in-out infinite';

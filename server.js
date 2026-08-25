@@ -418,7 +418,7 @@ function handleMessage(ws, msg) {
     if (!adminCheck()) return;
     const nick = (msg.target || '').trim();
     let kicked = false;
-    for (const [pid, c] of allRoomConns()) {
+    for (const c of allRoomConns()) {
       const { room, pid: p } = findPlayer(c);
       if (room && room.names.get(p) && room.names.get(p).toLowerCase() === nick.toLowerCase()) {
         try { c.close(4002, 'Kicked'); } catch(e) {}
@@ -675,7 +675,7 @@ if (t === 'create_room') {
   else if (t === 'kick_player') {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);
-    if (!r || pid !== r.host) return;
+    if (!r || pid !== r.host || r.game_started) return;
     const tgt = msg.playerId;
     if (tgt && r.players.includes(tgt) && tgt !== pid) {
       const kickedNick = r.names.get(tgt) || msg.kickedName || '';
@@ -704,6 +704,7 @@ if (t === 'create_room') {
     } else if (msg.settings && msg.settings.useCustom !== undefined) {
       r.useCustom = !!msg.settings.useCustom;
     }
+    if (msg.settings && Array.isArray(msg.settings.themes) && msg.settings.themes.length) r.themes = msg.settings.themes;
     if (msg.settings && msg.settings.spyGuess !== undefined) r.spy_guess = !!msg.settings.spyGuess;
     beginRound(r, msg.settings);
   }
@@ -795,7 +796,7 @@ if (t === 'create_room') {
   else if (t === 'tiebreaker_vote') {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);
-    if (r && pid && r.players.includes(pid) && msg.voteIndex !== undefined) {
+    if (r && pid && r.players.includes(pid) && r.voting_active && msg.voteIndex !== undefined) {
       const vi = parseInt(msg.voteIndex, 10);
       if (isNaN(vi) || vi < 0 || vi >= r.players.length) return;
       if (!r.tied_players || !r.tied_players.includes(vi)) return;
@@ -915,7 +916,9 @@ if (t === 'create_room') {
     if (isBanned(rjName)) { ws.send(JSON.stringify({ type: 'error', message: '🚫 Аккаунт забанен', banned: true })); return; }
     const candidates = Object.entries(rooms).filter(([, r]) =>
       !r.game_started && r.players.length < MAX_PLAYERS && !r.password &&
-      [...r.conns.values()].some(c => c.readyState === 1)
+      [...r.conns.values()].some(c => c.readyState === 1) &&
+      !(r.bannedNames && r.bannedNames.has(rjName.toLowerCase())) &&
+      !r.players.some(p => (r.names.get(p) || '').toLowerCase() === rjName.toLowerCase())
     );
     if (candidates.length > 0) {
       const [code, r] = candidates[Math.floor(Math.random() * candidates.length)];
@@ -1120,7 +1123,7 @@ return r;
 
 function pickWordAndOptions(r, settings) {
 let pool;
-const themes = (settings && settings.themes) || ['movies'];
+const themes = (settings && settings.themes) || r.themes || ['movies'];
     if (r.custom_words && r.custom_words.length && ((settings && settings.useCustom) || r.useCustom)) {
   pool = r.custom_words;
 } else {
@@ -2276,7 +2279,7 @@ if (TG_TOKEN) {
     const cid = msg.chat.id;
     const tid = String(msg.from.id);
     const sc = tgScenes[cid];
-    if (!sc || (msg.text && msg.text.startsWith('/'))) return;
+    if (!sc || !msg.text || msg.text.startsWith('/')) return;
 
     if (sc.step === 'wait_nick') {
       const nick = msg.text.trim();
