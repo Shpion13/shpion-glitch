@@ -128,7 +128,7 @@ function resolveTB(r, tied) {
   r.voting_active = false;
   const v = {};
   for (const [pid, vi] of Object.entries(r.tb_votes)) {
-    if (tied.includes(+vi)) v[vi] = (v[vi] || 0) + 1;
+    if (tied.includes(+vi)) v[vi] = (v[vi] || 0) + (r.chaos_double ? 2 : 1);
   }
   const arr = r.players.map((_, i) => v[i] || 0);
   const mx = Math.max(...Object.values(v), 0);
@@ -207,7 +207,7 @@ function handleDisconnect(ws) {
     return;
   }
   const wasHost = r.host === pid;
-  const inGame = r.game_started || r.spy_pending;
+  const inGame = r.game_started || r.spy_pending || r.round_pending;
   r.conns.delete(pid);
   if (inGame) {
     if (!r.afk) r.afk = new Set();
@@ -235,11 +235,11 @@ function checkVoteCompletion(r) {
 }
 
 const CHAOS_EVENTS = [
-  { id: 'time_boost',   emoji: '⚡', name: 'Молния',     desc: 'Обсуждение +20 сек', apply(r) { if (r.disc_timer) { clearTimeout(r.disc_timer); r.disc_timer = setTimeout(() => { r.disc_idx = r.disc_order.length; checkVoteCompletion(r); }, 20000); } } },
   { id: 'mute_random',  emoji: '🤐', name: 'Тишина',     desc: 'Случайный игрок молчит 15 сек' },
   { id: 'fake_word',    emoji: '🎭', name: 'Маскарад',   desc: 'Шпион получит подсказку', apply(r) { if (r.spy_indices) { for (const si of r.spy_indices) { const c = r.conns.get(r.players[si]); if (c && c.readyState === 1) c.send(JSON.stringify({ type: 'chaos_hint', text: '🎭 Шпион может назвать любое слово' })); } } } },
   { id: 'extra_votes',  emoji: '🗳️', name: 'Двойной голос', desc: 'Каждый голос считается x2' },
-  { id: 'swap_seats',   emoji: '🪑', name: 'Обмен местами', desc: 'Порядок обсуждения перемешан' },
+  { id: 'swap_seats',   emoji: '🪑', name: 'Обмен местами', desc: 'Порядок обсуждения перемешан', apply(r) { r.disc_order = shuffle([...r.disc_order]); r.disc_idx = 0; broadcast(r, { type: 'chaos_swap', order: r.disc_order.map(p => r.names.get(p) || '') }); } },
+  { id: 'reveal_random',emoji: '👁️', name: 'Шпионский взгляд', desc: 'Случайный игрок узнаёт роль', apply(r) { const alive = r.players.filter(p => !(r.afk && r.afk.has(p))); if (alive.length > 1) { const victim = pick(alive); const isSpy = r.spy_indices.has(r.players.indexOf(victim)); const c = r.conns.get(victim); if (c && c.readyState === 1) c.send(JSON.stringify({ type: 'chaos_hint', text: isSpy ? '👁️ Ты ШПИОН!' : '👁️ Ты мирный' })); } } },
 ];
 
 function triggerChaosEvent(r) {
@@ -257,10 +257,6 @@ function triggerChaosEvent(r) {
       broadcast(r, { type: 'chaos_mute', playerId: victim, name: r.names.get(victim) || '' });
       setTimeout(() => { if (r.chaos_muted) r.chaos_muted.delete(victim); }, 15000);
     }
-  }
-  else if (ev.id === 'swap_seats') {
-    r.disc_order = shuffle([...r.disc_order]);
-    broadcast(r, { type: 'chaos_swap', order: r.disc_order.map(p => r.names.get(p) || '') });
   }
   else if (ev.id === 'extra_votes') {
     r.chaos_double = true;
@@ -838,9 +834,11 @@ if (t === 'create_room') {
       if (r.skip_votes.size >= needed) {
         r.voting_active = false;
         r.game_started = false;
+        r.round_pending = true;
         r.round++;
         broadcast(r, { type: 'round_skipped', round: r.round, players: plist(r) });
         setTimeout(() => {
+          r.round_pending = false;
           beginRound(r, { mode: r.game_mode, chatMode: r.chat_mode, rated: r.rated, useCustom: r.useCustom });
         }, 2000);
       }
@@ -852,7 +850,7 @@ if (t === 'create_room') {
     if (!info) return;
     const acc = findAccountByNick(info.nickname);
     if (!acc) return;
-    const av = String(msg.avatar || '🕵️').slice(0, 4);
+    const av = [...String(msg.avatar || '🕵️')].slice(0, 2).join('');
     acc.avatar = av;
     saveAccounts();
     ws.send(JSON.stringify({ type: 'avatar_set', avatar: av }));
@@ -861,14 +859,14 @@ if (t === 'create_room') {
   else if (t === 'get_seasons') {
     const acc = findAccountByNick((msg.nickname || '').trim());
     if (!acc) return ws.send(JSON.stringify({ type: 'seasons_data', history: [] }));
-    checkSeasonReset(acc);
+    if (checkSeasonReset(acc)) saveAccounts();
     ws.send(JSON.stringify({ type: 'seasons_data', history: acc.seasonHistory || [], currentSeason: seasonKey(), resetDay: SEASON_RESET_DAY }));
   }
 
   // === CHAOS MINI-GAME ===
   else if (t === 'chaos_event') {
     const r = findRoom(ws);
-    if (r && r.game_mode === 'chaos' && !r.chaos_event_active) {
+    if (r && r.game_mode === 'chaos' && r.game_started && !r.chaos_event_active) {
       triggerChaosEvent(r);
     }
   }
@@ -878,7 +876,7 @@ if (t === 'create_room') {
     const { pid } = findPlayer(ws);
     if (r && pid === r.host) {
       r.round++;
-      beginRound(r, { mode: r.game_mode, chatMode: r.chat_mode, rated: r.rated });
+      beginRound(r, { mode: r.game_mode, chatMode: r.chat_mode, rated: r.rated, useCustom: r.useCustom });
     }
   }
 
@@ -899,6 +897,10 @@ if (t === 'create_room') {
       r.tb_votes = {};
       r.banned = new Set();
       r.afk = new Set();
+      r.skip_votes = new Set();
+      r.chaos_double = false;
+      r.chaos_muted = null;
+      r.chaos_event_active = false;
       if (r.grace) r.grace.clear();
       if (r.spy_timer) { clearTimeout(r.spy_timer); r.spy_timer = null; }
       r.spy_pending = false;
@@ -1146,6 +1148,10 @@ r.disc_order = [];
 r.disc_idx = 0;
 r.banned = new Set();
 r.afk = new Set();
+r.skip_votes = new Set();
+r.chaos_double = false;
+r.chaos_muted = null;
+r.chaos_event_active = false;
 if (r.grace) r.grace.clear();
 if (r.spy_timer) { clearTimeout(r.spy_timer); r.spy_timer = null; }
 r.spy_pending = false;
@@ -1677,6 +1683,8 @@ function updateAccountStats(nick, gameResult) {
   acc.stats.rating = Math.max(0, acc.stats.rating + delta);
   if (acc.stats.rating < 0) acc.stats.rating = 0;
 
+  if (!acc.coins) acc.coins = 0;
+
   // Win streak
   if (!acc.stats.winStreak) acc.stats.winStreak = 0;
   if (!acc.stats.maxWinStreak) acc.stats.maxWinStreak = 0;
@@ -1689,7 +1697,6 @@ function updateAccountStats(nick, gameResult) {
     acc.stats.winStreak = 0;
   }
 
-  if (!acc.coins) acc.coins = 0;
   const coinsDelta = won ? 12 : 5;
   acc.coins += coinsDelta;
 
