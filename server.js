@@ -82,6 +82,7 @@ function broadcast(r, msg, excl) {
 }
 
 function resolveVotes(r) {
+  r.voting_active = false;
   const v = {};
   for (const [pid, vi] of Object.entries(r.votes)) v[vi] = (v[vi] || 0) + 1;
   const arr = r.players.map((_, i) => v[i] || 0);
@@ -124,6 +125,7 @@ function onRoomGameOver(r) {
 }
 
 function resolveTB(r, tied) {
+  r.voting_active = false;
   const v = {};
   for (const [pid, vi] of Object.entries(r.tb_votes)) {
     if (tied.includes(+vi)) v[vi] = (v[vi] || 0) + 1;
@@ -141,7 +143,7 @@ function resolveTB(r, tied) {
     r.tb_votes = {};
     broadcast(r, { type: 'vote_tiebreaker', tiedPlayers: nt, votes: arr, players, round: r.tb_round });
   } else {
-    const mv = nt.length ? nt[0] : 0;
+    const mv = nt.length ? nt[0] : tied[Math.floor(Math.random() * tied.length)];
     if (!Array.isArray(r.vote_history)) r.vote_history = [];
     r.vote_history.push({ votes: Object.assign({}, r.tb_votes), ejected: mv, wasSpy: si.includes(mv) });
     if (si.includes(mv)) r.civScore++; else r.spyScore++;
@@ -562,6 +564,12 @@ if (t === 'create_room') {
     if (isBanned(joinName)) { ws.send(JSON.stringify({ type: 'error', message: '🚫 Аккаунт забанен', banned: true })); return; }
     if (r.bannedNames && r.bannedNames.has(joinName.toLowerCase())) { ws.send(JSON.stringify({ type: 'error', message: 'Вы были исключены из этой комнаты' })); return; }
 
+    // Block duplicate nicknames in room
+    if (joinName && r.players.some(pid => { const n = r.names.get(pid); return n && n.toLowerCase() === joinName.toLowerCase() && r.conns.has(pid); })) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Игрок с таким ником уже в комнате' }));
+      return;
+    }
+
     // Spectator mode
     if (msg.spectate) {
       const canSpec = isAdminJoin || isFriendJoin;
@@ -731,6 +739,7 @@ if (t === 'create_room') {
       r.votes = {};
       r.tb_round = 0;
       broadcast(r, { type: 'voting_started', players: plist(r) });
+  r.voting_active = true;
     }
   }
 
@@ -738,7 +747,10 @@ if (t === 'create_room') {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);
     if (r && pid && r.players.includes(pid) && msg.voteIndex !== undefined) {
-      r.votes[pid] = msg.voteIndex;
+      if (!r.voting_active) return;
+      const vi = parseInt(msg.voteIndex, 10);
+      if (isNaN(vi) || vi < 0 || vi >= r.players.length) return;
+      r.votes[pid] = vi;
       ws.send(JSON.stringify({ type: 'vote_ack' }));
       checkVoteCompletion(r);
     }
@@ -748,7 +760,10 @@ if (t === 'create_room') {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);
     if (r && pid && r.players.includes(pid) && msg.voteIndex !== undefined) {
-      r.tb_votes[pid] = msg.voteIndex;
+      const vi = parseInt(msg.voteIndex, 10);
+      if (isNaN(vi) || vi < 0 || vi >= r.players.length) return;
+      if (!r.tied_players || !r.tied_players.includes(vi)) return;
+      r.tb_votes[pid] = vi;
       ws.send(JSON.stringify({ type: 'vote_ack' }));
       const waiting = r.players.filter(p => r.tb_votes[p] === undefined).length;
       const afkWaiting = r.players.filter(p => r.afk && r.afk.has(p) && r.tb_votes[p] === undefined).length;
@@ -806,6 +821,8 @@ if (t === 'create_room') {
   }
 
   else if (t === 'random_join') {
+    const rjName = String(msg.name || '').trim();
+    if (isBanned(rjName)) { ws.send(JSON.stringify({ type: 'error', message: '🚫 Аккаунт забанен', banned: true })); return; }
     const candidates = Object.entries(rooms).filter(([, r]) =>
       !r.game_started && r.players.length < MAX_PLAYERS && !r.password &&
       [...r.conns.values()].some(c => c.readyState === 1)
@@ -1029,6 +1046,9 @@ return { word, similar, options: shuffle(options) };
 }
 
 function beginRound(r, settings) {
+// Remove disconnected (ghost) players before starting
+r.players = r.players.filter(pid => r.conns.has(pid));
+r.spy_indices = new Set([...r.spy_indices].filter(i => i < r.players.length));
 r.game_started = true;
 r.revealed = new Set();
 r.votes = {};
@@ -1090,8 +1110,8 @@ wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     try { handleMessage(ws, JSON.parse(data.toString())); } catch (e) { console.error('handleMessage error:', e && e.stack || e); }
   });
-  ws.on('close', () => handleDisconnect(ws));
-  ws.on('error', () => handleDisconnect(ws));
+  ws.on('close', () => { try { handleDisconnect(ws); } catch(e) { console.error('handleDisconnect error:', e && e.stack || e); } });
+  ws.on('error', () => { try { handleDisconnect(ws); } catch(e) {} });
 });
 
 server.listen(PORT, () => {
@@ -1103,6 +1123,13 @@ setInterval(() => {
   const now = Date.now();
   for (const [ws, info] of onlineClients) {
     if (now - info.lastPing > 60000) {
+      // Broadcast offline before removing
+      const offName = info.nickname;
+      if (offName) {
+        for (const [c] of onlineClients) {
+          if (c !== ws) { try { c.send(JSON.stringify({ type: 'user_offline', nickname: offName })); } catch(e) {} }
+        }
+      }
       try { ws.close(); } catch(e) {}
       onlineClients.delete(ws);
     }
