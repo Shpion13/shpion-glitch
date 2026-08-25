@@ -960,7 +960,7 @@ if (t === 'create_room') {
     if (!item) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Товар не найден' })); return; }
     if (!Array.isArray(acc.owned_frames)) acc.owned_frames = [];
     if (acc.owned_frames.includes(item.id)) { ws.send(JSON.stringify({ type: 'toast', text: 'Уже куплено' })); return; }
-    if ((acc.coins || 0) < item.price) { ws.send(JSON.stringify({ type: 'toast', text: '🪙 Не хватает монет (' + acc.coins + '/' + item.price + ')' })); return; }
+    if ((acc.coins || 0) < item.price) { ws.send(JSON.stringify({ type: 'toast', text: '🪙 Не хватает монет (' + (acc.coins || 0) + '/' + item.price + ')' })); return; }
     acc.coins -= item.price;
     acc.owned_frames.push(item.id);
     saveAccounts();
