@@ -104,14 +104,6 @@ function resolveVotes(r) {
     r.game_started = false;
     const p = { votes: arr, mostVoted: mv, spyIndices: si, word: w, players, civScore: r.civScore, spyScore: r.spyScore };
     if (r.civScore >= 3) {
-      if (r.spy_guess !== false && r.guess_options && r.guess_options.length) {
-        r.spy_pending = true;
-        r.spy_guess_votes = {};
-        broadcast(r, Object.assign({ type: 'spy_chance', options: shuffle([...r.guess_options]), timeoutMs: 30000 }, p));
-        if (r.spy_timer) clearTimeout(r.spy_timer);
-        r.spy_timer = setTimeout(() => finishWithSpyGuess(r, -1), 30000);
-        return;
-      }
       r.final_winner = 'civ';
       broadcast(r, Object.assign({ type: 'game_over', spyGuessed: null }, p));
       onRoomGameOver(r);
@@ -125,17 +117,6 @@ function resolveVotes(r) {
   }
 }
 
-function finishWithSpyGuess(r, optIndex) {
-  if (!r.spy_pending) return;
-  r.spy_pending = false;
-  if (r.spy_timer) { clearTimeout(r.spy_timer); r.spy_timer = null; }
-  const opts = r.guess_options || [];
-  const correct = optIndex >= 0 && optIndex < opts.length && String(opts[optIndex]).toLowerCase() === String(r.game_word).toLowerCase();
-  r.final_winner = correct ? 'spy' : 'civ';
-  if (correct) r.spyScore = Math.max(r.spyScore, 3);
-  broadcast(r, { type: 'game_over', votes: [], mostVoted: null, spyIndices: [...r.spy_indices], word: r.game_word, players: plist(r), civScore: r.civScore, spyScore: r.spyScore, spyGuessed: correct ? opts[optIndex] : (optIndex >= 0 ? opts[optIndex] : null), spyGuessCorrect: correct });
-  onRoomGameOver(r);
-}
 
 function onRoomGameOver(r) {
   try { finishRatedGame(r); } catch (e) {}
@@ -167,13 +148,6 @@ function resolveTB(r, tied) {
     r.game_started = false;
     const p = { votes: arr, mostVoted: mv, spyIndices: si, word: w, players, civScore: r.civScore, spyScore: r.spyScore };
     if (r.civScore >= 3) {
-      if (r.spy_guess !== false && r.guess_options && r.guess_options.length) {
-        r.spy_pending = true;
-        broadcast(r, Object.assign({ type: 'spy_chance', options: shuffle([...r.guess_options]), timeoutMs: 30000 }, p));
-        if (r.spy_timer) clearTimeout(r.spy_timer);
-        r.spy_timer = setTimeout(() => finishWithSpyGuess(r, -1), 30000);
-        return;
-      }
       r.final_winner = 'civ';
       broadcast(r, Object.assign({ type: 'game_over', spyGuessed: null }, p));
       onRoomGameOver(r);
@@ -779,15 +753,7 @@ if (t === 'create_room') {
     }
   }
 
-  else if (t === 'spy_guess') {
-    const r = findRoom(ws);
-    const { pid } = findPlayer(ws);
-    if (!r || !pid || !r.spy_pending) return;
-    const idx = r.players.indexOf(pid);
-    if (!r.spy_indices.has(idx)) return;
-    finishWithSpyGuess(r, parseInt(msg.optionIndex, 10));
-  }
-
+  
   else if (t === 'emote') {
     const r = findRoom(ws);
     const { pid } = findPlayer(ws);

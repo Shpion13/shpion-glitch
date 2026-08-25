@@ -5106,11 +5106,7 @@ function olHandle(msg) {
       olRenderLobbyPlayers();
       break;
     }
-    case 'spy_chance': {
-      showSpyGuess(msg);
-      break;
-    }
-    case 'emote': {
+        case 'emote': {
       spawnEmote(msg.emote);
       break;
     }
@@ -5182,42 +5178,6 @@ function renderTournBanner(st) {
   } else {
     b.innerHTML = '🏆 Турнир: раунд ' + st.round + ' завершён. Ждём продолжения...';
   }
-}
-
-let spyGuessTimerIv = null;
-function showSpyGuess(msg) {
-  const ov = document.getElementById('spy-guess-overlay');
-  if (!ov) return;
-  ov.style.display = 'flex';
-  const box = document.getElementById('spy-guess-options');
-  box.innerHTML = '';
-  (msg.options || []).forEach((w, i) => {
-    const b = document.createElement('button');
-    b.className = 'spy-opt';
-    b.textContent = w;
-    b.onclick = () => {
-      SFX.click();
-      olSend({ type: 'spy_guess', optionIndex: i });
-      endSpyGuess();
-      showToast('🤞 Твой выбор: ' + w);
-    };
-    box.appendChild(b);
-  });
-  let left = msg.timeoutMs ? Math.round(msg.timeoutMs / 1000) : 30;
-  document.getElementById('spy-guess-timer').textContent = left;
-  clearInterval(spyGuessTimerIv);
-  spyGuessTimerIv = setInterval(() => {
-    left--;
-    const el = document.getElementById('spy-guess-timer');
-    if (el) el.textContent = Math.max(0, left);
-    if (left <= 0) endSpyGuess();
-  }, 1000);
-}
-function endSpyGuess() {
-  clearInterval(spyGuessTimerIv);
-  spyGuessTimerIv = null;
-  const ov = document.getElementById('spy-guess-overlay');
-  if (ov) ov.style.display = 'none';
 }
 
 function spawnEmote(emote) {
@@ -6476,19 +6436,11 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
     </div>
   </div>
 </div>
-<!-- Spy guess overlay -->
-<div id="spy-guess-overlay" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.82);backdrop-filter:blur(6px);align-items:center;justify-content:center;flex-direction:column;padding:20px">
-  <div style="font-size:1.6em;font-weight:900;color:#ffd200;margin-bottom:6px">🕵️ Шанс шпиона!</div>
-  <div style="font-size:.9em;color:#ccc;margin-bottom:16px;text-align:center">Граждане выигрывают! Угадай слово и забери победу:<br><span style="color:#ffd200;font-weight:700" id="spy-guess-timer">30</span> сек</div>
-  <div id="spy-guess-options" style="display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px"></div>
-</div>
 <style>
 .emote-btn{font-size:1.5em;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:6px 10px;transition:transform .12s}
 .emote-btn:active{transform:scale(1.35);background:rgba(var(--neon-rgb),.18)}
 .fly-emote{position:absolute;font-size:2em;animation:flyUp 2.4s ease-out forwards;pointer-events:none}
 @keyframes flyUp{0%{transform:translateY(0) scale(.7);opacity:0}15%{opacity:1}100%{transform:translateY(-160px) scale(1.4);opacity:0}}
-.spy-opt{width:100%;padding:14px;border-radius:14px;border:2px solid rgba(255,210,0,.4);background:rgba(255,255,255,.05);color:#fff;font-size:1em;font-weight:700}
-.spy-opt:active{background:rgba(255,210,0,.25)}
 .hist-item{display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px 10px;font-size:.8em}
 .quest-item{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px}
 .top-row{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border-radius:10px;padding:6px 10px;font-size:.85em}
