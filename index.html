@@ -4732,6 +4732,7 @@ $$('.sound-toggle').forEach(b => b.classList.toggle('active', b.dataset.sound ==
 </script>
 
 <script>
+function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
 // === ONLINE MODE ===
 const OL = {
   ws: null,
@@ -5289,7 +5290,7 @@ function renderTop(msg) {
   msg.top.forEach((r, i) => {
     const row = document.createElement('div');
     row.className = 'top-row';
-    row.innerHTML = '<b style="width:26px;color:' + (i === 0 ? '#ffd200' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#888') + '">' + (i + 1) + '</b><span style="flex:1">' + r.nickname + '</span><span style="color:#00d4aa">+' + r.weekly + '</span><span style="opacity:.5;font-size:.85em">' + r.rating + '</span>';
+    row.innerHTML = '<b style="width:26px;color:' + (i === 0 ? '#ffd200' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#888') + '">' + (i + 1) + '</b><span style="flex:1">' + escapeHtml(r.nickname) + '</span><span style="color:#00d4aa">+' + r.weekly + '</span><span style="opacity:.5;font-size:.85em">' + r.rating + '</span>';
     list.appendChild(row);
   });
 }
@@ -5876,6 +5877,10 @@ function syncServerStats(serverStats) {
   const merged = Object.assign({}, local, serverStats);
   saveStats(merged);
   localStorage.setItem('shpion_frame', serverStats.frame || localStorage.getItem('shpion_frame') || 'default');
+  if (OL.ws && OL.ws.readyState === 1) {
+    olSend({ type: 'get_achievements', nickname: serverStats.nickname || localStorage.getItem('spy_player_name') });
+    return;
+  }
   try {
     const wsUrl = getWsUrl();
     const sws = new WebSocket(wsUrl);

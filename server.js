@@ -1104,7 +1104,7 @@ const server = http.createServer((req, res) => {
   }
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, maxPayload: 8192 });
 
 wss.on('connection', (ws) => {
   ws.on('message', (data) => {
@@ -1437,6 +1437,7 @@ function handleRegister(msg) {
   const pass = (msg.password || '').trim();
   if (!nick || !pass) return { ok: false, error: 'Заполни все поля' };
   if (nick.length < 2 || nick.length > 20) return { ok: false, error: 'Ник 2-20 символов' };
+  if (/[<>"'&]/.test(nick)) return { ok: false, error: 'Ник содержит запрещённые символы' };
   if (pass.length < 4) return { ok: false, error: 'Пароль минимум 4 символа' };
   if (findAccountByNick(nick)) return { ok: false, error: 'Ник уже занят' };
   const id = 'acc_' + crypto.randomUUID().slice(0, 8);
