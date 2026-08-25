@@ -1251,6 +1251,11 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
         <button class="btn theme-btn" id="lobby-rated-on" data-i18n="lobby.rated_on">🏆 Рейтинг</button>
         <button class="btn theme-btn selected" id="lobby-rated-off" data-i18n="lobby.rated_off">🎮 Без рейтинга</button>
       </div>
+      <div class="section-title" style="margin-top:10px">Сложность</div>
+      <div class="row" id="lobby-diff-btns">
+        <button class="btn theme-btn selected" id="lobby-diff-classic">🕵️ Классика</button>
+        <button class="btn theme-btn" id="lobby-diff-similar">🔥 Сложный шпион</button>
+      </div>
     </div>
     <button class="btn btn-lg fade-in fade-in-d3" id="lobby-start-btn" style="width:100%" data-i18n="lobby.start">▶ Начать игру</button>
     <button class="btn btn-lg fade-in fade-in-d4" id="lobby-leave-btn" style="width:100%;background:rgba(255,51,102,.08);border-color:rgba(255,51,102,.2);color:#ff6677" data-i18n="lobby.leave">🚪 Выйти</button>
@@ -4752,6 +4757,7 @@ const OL = {
   voicePeers: {},
   voiceEnabled: false,
   rated: false,
+  diffMode: 'classic',
 };
 
 const OL_SERVER_PRIMARY = 'wss://shpiongame.ru';
@@ -5068,7 +5074,8 @@ function olHandle(msg) {
       break;
     }
     case 'quest_claimed': {
-      showToast('🎁 +' + msg.bonus + ' рейтинга!');
+      const coinStr = typeof msg.coins === 'number' ? ' и +8 🪙' : '';
+      showToast('🎁 +' + msg.bonus + ' рейтинга' + coinStr + '!');
       const n = hubNick();
       if (n) olSend({ type: 'get_daily_quests', nickname: n });
       break;
@@ -5083,6 +5090,16 @@ function olHandle(msg) {
     }
     case 'my_ref': {
       renderRef(msg);
+      break;
+    }
+    case 'shop_data': {
+      renderShop(msg);
+      break;
+    }
+    case 'shop_bought': {
+      showToast('🛒 Рамка куплена!');
+      const n2 = hubNick();
+      if (n2 && OL.ws && OL.ws.readyState === 1) olSend({ type: 'get_shop', nickname: n2 });
       break;
     }
     case 'room_reconnected': {
@@ -5213,13 +5230,17 @@ document.getElementById('hub-close-btn').addEventListener('click', () => {
   SFX.click();
   document.getElementById('hub-wrap').classList.remove('open');
 });
-['hubtab-q','hubtab-t','hubtab-h','hubtab-r'].forEach((id, ix) => {
+['hubtab-q','hubtab-t','hubtab-h','hubtab-r','hubtab-s'].forEach((id, ix) => {
   document.getElementById(id).addEventListener('click', () => {
     SFX.click();
     document.querySelectorAll('#hub-wrap .chat-tab').forEach(t => t.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     document.querySelectorAll('#hub-wrap .chat-page').forEach(p => p.classList.remove('active'));
-    document.getElementById(['hubpage-q','hubpage-t','hubpage-h','hubpage-r'][ix]).classList.add('active');
+    document.getElementById(['hubpage-q','hubpage-t','hubpage-h','hubpage-r','hubpage-s'][ix]).classList.add('active');
+    if (id === 'hubtab-s') {
+      const n = hubNick();
+      if (n && OL.ws && OL.ws.readyState === 1) olSend({ type: 'get_shop', nickname: n });
+    }
   });
 });
 function hubNick() {
@@ -5317,6 +5338,41 @@ document.getElementById('ref-apply-btn').addEventListener('click', () => {
   if (!code) return;
   olSend({ type: 'apply_ref_code', nickname: hubNick(), code });
 });
+
+function renderShop(msg) {
+  document.getElementById('shop-balance').textContent = '🪙 ' + (msg.balance || 0);
+  const el = document.getElementById('shop-list');
+  if (!el) return;
+  el.innerHTML = '';
+  (msg.items || []).forEach(item => {
+    const d = document.createElement('div');
+    d.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06)';
+    const preview = document.createElement('div');
+    preview.style.cssText = 'width:44px;height:44px;border-radius:50%;flex-shrink:0;border:' + item.border + ';box-shadow:' + item.shadow + ';background:rgba(0,0,0,.3)';
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1';
+    info.innerHTML = '<div style="font-weight:700;font-size:.9em">' + item.name + '</div><div style="font-size:.78em;color:#888">🪙 ' + item.price + '</div>';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm';
+    btn.style.cssText = 'font-size:.78em;padding:6px 14px;min-width:80px';
+    if (item.owned) {
+      btn.textContent = '✓';
+      btn.style.cssText += 'background:rgba(0,212,170,.15);border-color:rgba(0,212,170,.4);color:#00d4aa;pointer-events:none';
+    } else {
+      btn.textContent = 'Купить';
+      btn.style.cssText += 'background:rgba(255,210,0,.1);border-color:rgba(255,210,0,.3);color:#ffd200';
+      btn.addEventListener('click', () => {
+        SFX.click();
+        const n = hubNick();
+        if (n) olSend({ type: 'buy_frame', nickname: n, frameId: item.id });
+      });
+    }
+    d.appendChild(preview);
+    d.appendChild(info);
+    d.appendChild(btn);
+    el.appendChild(d);
+  });
+}
 
 </script>
 <script>
@@ -5527,7 +5583,7 @@ function renderMyRating() {
   const cEl = document.getElementById('online-rating-calib');
   const sign = my.delta >= 0 ? '+' : '';
   const col = my.delta >= 0 ? '#00ff88' : '#ff6677';
-  dEl.innerHTML = '<span style="color:' + col + '">' + sign + my.delta + '</span> 📈 Рейтинг: <b>' + my.rating + '</b>';
+  dEl.innerHTML = '<span style="color:' + col + '">' + sign + my.delta + '</span> 📈 Рейтинг: <b>' + my.rating + '</b>' + (my.coinsDelta ? ' &nbsp;🪙 +' + my.coinsDelta : '');
   pEl.textContent = my.perfLabel || '';
   if (my.placing) {
     cEl.textContent = '🎯 Калибровка рейтинга: осталось ' + my.placementLeft + ' ' + plural(my.placementLeft, ['игра', 'игры', 'игр']);
@@ -6150,8 +6206,22 @@ document.getElementById('lobby-start-btn').addEventListener('click', () => {
   SFX.click();
   olSend({
     type: 'start_game',
-    settings: { themes: OL.selectedThemes.length ? OL.selectedThemes : ['movies'], mode: 'classic', chatMode: OL.chatMode, rated: OL.rated },
+    settings: { themes: OL.selectedThemes.length ? OL.selectedThemes : ['movies'], mode: OL.diffMode || 'classic', chatMode: OL.chatMode, rated: OL.rated },
   });
+});
+
+// Difficulty toggle (classic / hard spy)
+document.getElementById('lobby-diff-classic').addEventListener('click', () => {
+  SFX.click();
+  OL.diffMode = 'classic';
+  document.getElementById('lobby-diff-classic').classList.add('selected');
+  document.getElementById('lobby-diff-similar').classList.remove('selected');
+});
+document.getElementById('lobby-diff-similar').addEventListener('click', () => {
+  SFX.click();
+  OL.diffMode = 'similar';
+  document.getElementById('lobby-diff-similar').classList.add('selected');
+  document.getElementById('lobby-diff-classic').classList.remove('selected');
 });
 
 document.getElementById('lobby-mode-voice').addEventListener('click', () => {
@@ -6413,6 +6483,7 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
     <button class="hub-tab chat-tab" id="hubtab-t">🏆 Топ</button>
     <button class="chat-tab" id="hubtab-h">📜 История</button>
     <button class="chat-tab" id="hubtab-r">🤝 Рефы</button>
+    <button class="chat-tab" id="hubtab-s">🛒 Магазин</button>
   </div>
   <div class="chat-body">
     <div class="chat-page active" id="hubpage-q"><div id="quest-list" style="display:flex;flex-direction:column;gap:10px"></div></div>
@@ -6433,6 +6504,13 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
         <button class="chat-send" id="ref-apply-btn">OK</button>
       </div>
       <div id="ref-invited" style="font-size:.8em;color:#888"></div>
+    </div>
+    <div class="chat-page" id="hubpage-s">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-size:.85em;color:#aaa">Рамки за монеты — монеты капают за каждую игру</span>
+        <b id="shop-balance" style="color:#ffd200;font-size:1.05em">🪙 —</b>
+      </div>
+      <div id="shop-list" style="display:flex;flex-direction:column;gap:10px"></div>
     </div>
   </div>
 </div>
@@ -6702,6 +6780,11 @@ const ffs = (f.frame && typeof window.getProfileFrameStyle === 'function') ? win
     r_immortal:{ border: '3px solid #00ffff', shadow: '0 0 25px rgba(0,255,255,.6)', name: 'Бессмертный', color: '#00ffff' },
         friendship:{ border: '3px solid #00d4aa', shadow: '0 0 16px rgba(0,212,170,.5)', name: 'Дружба', color: '#00d4aa' },
     champion_t:{ border: '4px double #ffd700', shadow: '0 0 24px rgba(255,215,0,.8)', name: 'Чемпион', color: '#ffd700' },
+    s_aurora:  { border: '3px solid #7df9ff', shadow: '0 0 18px rgba(125,249,255,.55)', name: 'Полярная', color: '#7df9ff' },
+    s_rose:    { border: '3px solid #ff7eb3', shadow: '0 0 16px rgba(255,126,179,.5)', name: 'Розовый туман', color: '#ff7eb3' },
+    s_ice:     { border: '3px solid #a8d8ff', shadow: '0 0 20px rgba(168,216,255,.6)', name: 'Ледяная', color: '#a8d8ff' },
+    s_royal:   { border: '4px double #ffd54f', shadow: '0 0 22px rgba(255,213,79,.75)', name: 'Королевское золото', color: '#ffd54f' },
+    s_void:    { border: '3px solid #9d4edd', shadow: '0 0 26px rgba(157,78,221,.8)', name: 'Пустота', color: '#9d4edd' },
 r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)', name: 'Глобальная Элита', color: '#fff200' },
   };
 

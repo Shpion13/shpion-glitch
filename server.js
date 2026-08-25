@@ -657,6 +657,9 @@ if (t === 'create_room') {
     if (r.players.length < 3) { ws.send(JSON.stringify({ type: 'error', message: 'Нужно минимум 3 игрока' })); return; }
     if (msg.settings && Array.isArray(msg.settings.customWords) && msg.settings.customWords.length) {
       r.custom_words = sanitizeCustomWords(msg.settings.customWords);
+      r.useCustom = !!(msg.settings.useCustom);
+    } else if (msg.settings && msg.settings.useCustom !== undefined) {
+      r.useCustom = !!msg.settings.useCustom;
     }
     if (msg.settings && msg.settings.spyGuess !== undefined) r.spy_guess = !!msg.settings.spyGuess;
     beginRound(r, msg.settings);
@@ -896,12 +899,14 @@ if (t === 'create_room') {
     q.claimed = true;
     const bonus = 5;
     acc.stats.rating += bonus;
+    if (!acc.coins) acc.coins = 0;
+    acc.coins += 8;
     const wk = isoWeekKey();
     if (!acc.weekly || acc.weekly.week !== wk) acc.weekly = { week: wk, rating: 0, wins: 0, games: 0 };
     acc.weekly.rating += bonus;
     saveAccounts();
-    ws.send(JSON.stringify({ type: 'quest_claimed', index: idx, bonus, rating: acc.stats.rating }));
-    ws.send(JSON.stringify({ type: 'toast', text: '🎁 +' + bonus + ' рейтинга за задание!' }));
+    ws.send(JSON.stringify({ type: 'quest_claimed', index: idx, bonus, rating: acc.stats.rating, coins: acc.coins }));
+    ws.send(JSON.stringify({ type: 'toast', text: '🎁 +' + bonus + ' рейтинга и +8 🪙 за задание!' }));
   }
 
   // === MATCH HISTORY ===
@@ -935,6 +940,32 @@ if (t === 'create_room') {
     ws.send(JSON.stringify({ type: 'toast', text: '🤝 Код применён! Рамка «Дружба» разблокирована' }));
     notifyUser(inviter.nickname, { type: 'toast', text: '🤝 ' + nick + ' применил твой код! Рамка «Дружба» твоя' });
     tgNotify(inviter.nickname, '🤝 По твоему реферальному коду зарегистрировался ' + nick + '! Рамка «Дружба» разблокирована.');
+  }
+
+  // === FRAME SHOP ===
+  else if (t === 'get_shop') {
+    const acc = findAccountByNick((msg.nickname || '').trim());
+    const owned = acc ? ownedFramesOf(acc) : [];
+    const items = SHOP_FRAMES.map(s => {
+      const f = FRAMES[s.id] || {};
+      return { id: s.id, price: s.price, name: f.name || s.id, border: f.border, shadow: f.shadow, owned: owned.includes(s.id) };
+    });
+    ws.send(JSON.stringify({ type: 'shop_data', balance: acc ? (acc.coins || 0) : 0, items }));
+  }
+
+  else if (t === 'buy_frame') {
+    const acc = findAccountByNick((msg.nickname || '').trim());
+    const item = SHOP_FRAMES.find(x => x.id === msg.frameId);
+    if (!acc) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Сначала зарегистрируйся' })); return; }
+    if (!item) { ws.send(JSON.stringify({ type: 'toast', text: '❌ Товар не найден' })); return; }
+    if (!Array.isArray(acc.owned_frames)) acc.owned_frames = [];
+    if (acc.owned_frames.includes(item.id)) { ws.send(JSON.stringify({ type: 'toast', text: 'Уже куплено' })); return; }
+    if ((acc.coins || 0) < item.price) { ws.send(JSON.stringify({ type: 'toast', text: '🪙 Не хватает монет (' + acc.coins + '/' + item.price + ')' })); return; }
+    acc.coins -= item.price;
+    acc.owned_frames.push(item.id);
+    saveAccounts();
+    ws.send(JSON.stringify({ type: 'shop_bought', frameId: item.id, balance: acc.coins }));
+    ws.send(JSON.stringify({ type: 'toast', text: '🛒 Рамка «' + (FRAMES[item.id].name) + '» куплена!' }));
   }
 
   // === TOURNAMENT ===
@@ -983,7 +1014,7 @@ return r;
 function pickWordAndOptions(r, settings) {
 let pool;
 const themes = (settings && settings.themes) || ['movies'];
-if (r.custom_words && r.custom_words.length && (settings && settings.useCustom)) {
+    if (r.custom_words && r.custom_words.length && ((settings && settings.useCustom) || r.useCustom)) {
   pool = r.custom_words;
 } else {
   const theme = pick(themes);
@@ -1499,6 +1530,10 @@ function updateAccountStats(nick, gameResult) {
   acc.stats.rating = Math.max(0, acc.stats.rating + delta);
   if (acc.stats.rating < 0) acc.stats.rating = 0;
 
+  if (!acc.coins) acc.coins = 0;
+  const coinsDelta = won ? 12 : 5;
+  acc.coins += coinsDelta;
+
   // Weekly rating tracking
   const wk = isoWeekKey();
   if (!acc.weekly || acc.weekly.week !== wk) acc.weekly = { week: wk, rating: 0, wins: 0, games: 0 };
@@ -1540,7 +1575,7 @@ function updateAccountStats(nick, gameResult) {
   checkAchievements(acc);
   saveAccounts();
 
-  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0, frame: acc.frame || 'default', weeklyRating: acc.weekly ? acc.weekly.rating : 0, won };
+  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0, frame: acc.frame || 'default', weeklyRating: acc.weekly ? acc.weekly.rating : 0, won, coins: acc.coins, coinsDelta };
 }
 
 function evalPlayerPerf(r, pid, idx, isSpy, roundsPlayed) {
@@ -1663,7 +1698,20 @@ const FRAMES = {
   r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)', name: 'Глобальная Элита' },
   friendship:{ border: '3px solid #00d4aa', shadow: '0 0 16px rgba(0,212,170,.5)', name: 'Дружба' },
   champion_t:{ border: '4px double #ffd700', shadow: '0 0 24px rgba(255,215,0,.8)', name: 'Чемпион' },
+  s_aurora:  { border: '3px solid #7df9ff', shadow: '0 0 18px rgba(125,249,255,.55)', name: 'Полярная' },
+  s_rose:    { border: '3px solid #ff7eb3', shadow: '0 0 16px rgba(255,126,179,.5)', name: 'Розовый туман' },
+  s_ice:     { border: '3px solid #a8d8ff', shadow: '0 0 20px rgba(168,216,255,.6)', name: 'Ледяная' },
+  s_royal:   { border: '4px double #ffd54f', shadow: '0 0 22px rgba(255,213,79,.75)', name: 'Королевское золото' },
+  s_void:    { border: '3px solid #9d4edd', shadow: '0 0 26px rgba(157,78,221,.8)', name: 'Пустота' },
 };
+
+const SHOP_FRAMES = [
+  { id: 's_aurora', price: 150 },
+  { id: 's_rose',   price: 200 },
+  { id: 's_ice',    price: 250 },
+  { id: 's_royal',  price: 400 },
+  { id: 's_void',   price: 550 },
+];
 
 function checkAchievements(acc) {
   if (!acc.achievements) acc.achievements = [];
@@ -1673,6 +1721,10 @@ function checkAchievements(acc) {
       acc.achievements.push(a.id);
     }
   });
+}
+
+function ownedFramesOf(acc) {
+  return Array.isArray(acc.owned_frames) ? acc.owned_frames.slice() : [];
 }
 
 function getAchievements(nick) {
@@ -1685,7 +1737,9 @@ function getAchievements(nick) {
     const a = ACHIEVEMENTS.find(x => x.id === aid);
     if (a && !unlockedFrames.includes(a.frame)) unlockedFrames.push(a.frame);
   });
-  return { achievements: acc.achievements, frames: unlockedFrames, frame: acc.frame, stats: acc.stats };
+  ownedFramesOf(acc).forEach(f => { if (!unlockedFrames.includes(f)) unlockedFrames.push(f); });
+  const coins = acc.coins || 0;
+  return { achievements: acc.achievements, frames: unlockedFrames, frame: acc.frame, stats: acc.stats, coins };
 }
 
 function setFrame(nick, frameId) {
@@ -1697,6 +1751,7 @@ function setFrame(nick, frameId) {
     const a = ACHIEVEMENTS.find(x => x.id === aid);
     if (a && !unlocked.includes(a.frame)) unlocked.push(a.frame);
   });
+  ownedFramesOf(acc).forEach(f => { if (!unlocked.includes(f)) unlocked.push(f); });
   if (!unlocked.includes(frameId)) return { ok: false, error: 'Рамка не разблокирована' };
   acc.frame = frameId;
   saveAccounts();
@@ -1713,7 +1768,8 @@ function getAccountProfile(nick) {
     const a = ACHIEVEMENTS.find(x => x.id === aid);
     if (a && !unlockedFrames.includes(a.frame)) unlockedFrames.push(a.frame);
   });
-  return { nickname: acc.nickname, stats: acc.stats || {}, frame: acc.frame, frames: unlockedFrames, achievements: acc.achievements, tgLinked: !!acc.tgId };
+  ownedFramesOf(acc).forEach(f => { if (!unlockedFrames.includes(f)) unlockedFrames.push(f); });
+  return { nickname: acc.nickname, stats: acc.stats || {}, frame: acc.frame, frames: unlockedFrames, achievements: acc.achievements, tgLinked: !!acc.tgId, coins: acc.coins || 0 };
 }
 
 function handleLinkTG(msg) {
