@@ -1398,6 +1398,7 @@ function allRoomConns() {
 }
 
 function findAccountByNick(nick) {
+  if (!nick || typeof nick !== 'string') return null;
   for (const [id, a] of Object.entries(accounts)) {
     if (a.nickname.toLowerCase() === nick.toLowerCase()) { a.id = id; return a; }
   }

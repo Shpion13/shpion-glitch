@@ -5074,8 +5074,6 @@ function olHandle(msg) {
       break;
     }
     case 'quest_claimed': {
-      const coinStr = typeof msg.coins === 'number' ? ' и +8 🪙' : '';
-      showToast('🎁 +' + msg.bonus + ' рейтинга' + coinStr + '!');
       const n = hubNick();
       if (n) olSend({ type: 'get_daily_quests', nickname: n });
       break;
@@ -5097,7 +5095,6 @@ function olHandle(msg) {
       break;
     }
     case 'shop_bought': {
-      showToast('🛒 Рамка куплена!');
       const n2 = hubNick();
       if (n2 && OL.ws && OL.ws.readyState === 1) olSend({ type: 'get_shop', nickname: n2 });
       break;
