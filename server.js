@@ -84,7 +84,7 @@ function broadcast(r, msg, excl) {
 function resolveVotes(r) {
   r.voting_active = false;
   const v = {};
-  for (const [pid, vi] of Object.entries(r.votes)) v[vi] = (v[vi] || 0) + 1;
+  for (const [pid, vi] of Object.entries(r.votes)) v[vi] = (v[vi] || 0) + (r.chaos_double ? 2 : 1);
   const arr = r.players.map((_, i) => v[i] || 0);
   const mx = Math.max(...Object.values(v), 0);
   const tied = Object.entries(v).filter(([, val]) => val === mx && mx > 0).map(([idx]) => +idx).sort((a, b) => a - b);
@@ -232,6 +232,45 @@ function checkVoteCompletion(r) {
   const waiting = r.players.filter(p => !(r.votes && r.votes[p] !== undefined)).length;
   const afkWaiting = r.players.filter(p => r.afk && r.afk.has(p) && r.votes[p] === undefined).length;
   if (waiting - afkWaiting <= 0 && r.players.length > 0 && (pendingVotes + afkWaiting) >= r.players.length && Object.keys(r.votes).length >= Math.max(1, r.players.length - afkWaiting)) resolveVotes(r);
+}
+
+const CHAOS_EVENTS = [
+  { id: 'time_boost',   emoji: '⚡', name: 'Молния',     desc: 'Обсуждение +20 сек', apply(r) { if (r.disc_timer) { clearTimeout(r.disc_timer); r.disc_timer = setTimeout(() => { r.disc_idx = r.disc_order.length; checkVoteCompletion(r); }, 20000); } } },
+  { id: 'mute_random',  emoji: '🤐', name: 'Тишина',     desc: 'Случайный игрок молчит 15 сек' },
+  { id: 'fake_word',    emoji: '🎭', name: 'Маскарад',   desc: 'Шпион получит подсказку', apply(r) { if (r.spy_indices) { for (const si of r.spy_indices) { const c = r.conns.get(r.players[si]); if (c && c.readyState === 1) c.send(JSON.stringify({ type: 'chaos_hint', text: '🎭 Шпион может назвать любое слово' })); } } } },
+  { id: 'extra_votes',  emoji: '🗳️', name: 'Двойной голос', desc: 'Каждый голос считается x2' },
+  { id: 'swap_seats',   emoji: '🪑', name: 'Обмен местами', desc: 'Порядок обсуждения перемешан' },
+];
+
+function triggerChaosEvent(r) {
+  if (r.chaos_event_active) return;
+  const ev = pick(CHAOS_EVENTS);
+  r.chaos_event_active = true;
+  broadcast(r, { type: 'chaos_event', emoji: ev.emoji, name: ev.name, desc: ev.desc });
+
+  if (ev.id === 'mute_random') {
+    const alive = r.players.filter(p => !(r.afk && r.afk.has(p)));
+    if (alive.length > 0) {
+      const victim = pick(alive);
+      if (!r.chaos_muted) r.chaos_muted = new Set();
+      r.chaos_muted.add(victim);
+      broadcast(r, { type: 'chaos_mute', playerId: victim, name: r.names.get(victim) || '' });
+      setTimeout(() => { if (r.chaos_muted) r.chaos_muted.delete(victim); }, 15000);
+    }
+  }
+  else if (ev.id === 'swap_seats') {
+    r.disc_order = shuffle([...r.disc_order]);
+    broadcast(r, { type: 'chaos_swap', order: r.disc_order.map(p => r.names.get(p) || '') });
+  }
+  else if (ev.id === 'extra_votes') {
+    r.chaos_double = true;
+    setTimeout(() => { r.chaos_double = false; }, 30000);
+  }
+  else if (ev.apply) {
+    ev.apply(r);
+  }
+
+  setTimeout(() => { r.chaos_event_active = false; }, 5000);
 }
 
 function handleMessage(ws, msg) {
@@ -687,6 +726,7 @@ if (t === 'create_room') {
     if (r && pid) {
       const nick = r.names.get(pid) || 'Игрок';
       if (isMuted(nick)) { try { ws.send(JSON.stringify({ type: 'toast', text: '🔇 Ты в муте - чат недоступен' })); } catch(e) {} return; }
+      if (r.chaos_muted && r.chaos_muted.has(pid)) { try { ws.send(JSON.stringify({ type: 'toast', text: '🤐 Ты замьючен хаос-событием!' })); } catch(e) {} return; }
       const acc = findAccountByNick(nick);
       broadcast(r, { type: 'chat', from: nick, text: (msg.text || '').slice(0, 500), playerId: pid, time: Date.now(), frame: acc ? (acc.frame || 'default') : 'default' });
     }
@@ -782,6 +822,54 @@ if (t === 'create_room') {
       if (now - (r.emote_ts[pid] || 0) < 1200) return;
       r.emote_ts[pid] = now;
       broadcast(r, { type: 'emote', playerId: pid, emoji: msg.emoji });
+    }
+  }
+
+  else if (t === 'skip_vote') {
+    const r = findRoom(ws);
+    const { pid } = findPlayer(ws);
+    if (r && pid && r.voting_active && r.players.includes(pid)) {
+      if (!r.skip_votes) r.skip_votes = new Set();
+      if (r.skip_votes.has(pid)) return;
+      r.skip_votes.add(pid);
+      const alive = r.players.filter(p => !(r.afk && r.afk.has(p)));
+      const needed = Math.ceil(alive.length / 2);
+      broadcast(r, { type: 'skip_update', count: r.skip_votes.size, needed });
+      if (r.skip_votes.size >= needed) {
+        r.voting_active = false;
+        r.game_started = false;
+        r.round++;
+        broadcast(r, { type: 'round_skipped', round: r.round, players: plist(r) });
+        setTimeout(() => {
+          beginRound(r, { mode: r.game_mode, chatMode: r.chat_mode, rated: r.rated, useCustom: r.useCustom });
+        }, 2000);
+      }
+    }
+  }
+
+  else if (t === 'set_avatar') {
+    const info = onlineClients.get(ws);
+    if (!info) return;
+    const acc = findAccountByNick(info.nickname);
+    if (!acc) return;
+    const av = String(msg.avatar || '🕵️').slice(0, 4);
+    acc.avatar = av;
+    saveAccounts();
+    ws.send(JSON.stringify({ type: 'avatar_set', avatar: av }));
+  }
+
+  else if (t === 'get_seasons') {
+    const acc = findAccountByNick((msg.nickname || '').trim());
+    if (!acc) return ws.send(JSON.stringify({ type: 'seasons_data', history: [] }));
+    checkSeasonReset(acc);
+    ws.send(JSON.stringify({ type: 'seasons_data', history: acc.seasonHistory || [], currentSeason: seasonKey(), resetDay: SEASON_RESET_DAY }));
+  }
+
+  // === CHAOS MINI-GAME ===
+  else if (t === 'chaos_event') {
+    const r = findRoom(ws);
+    if (r && r.game_mode === 'chaos' && !r.chaos_event_active) {
+      triggerChaosEvent(r);
     }
   }
 
@@ -1072,9 +1160,9 @@ r.similar_word = picked.similar;
 r.guess_options = picked.options;
 r.game_mode = mode;
 r.chat_mode = (settings && settings.chatMode) || 'voice';
-r.rated = !!(settings && settings.rated);
+  r.rated = !!(settings && settings.rated) && mode !== 'chaos';
 r.spy_indices = si;
-broadcast(r, { type: 'game_started', themeEmoji: r.round > 1 ? '🔄' : '❓', themeLabel: r.round > 1 ? ('Раунд ' + r.round) : 'ШПИОН', chatMode: r.chat_mode, rated: r.rated });
+broadcast(r, { type: 'game_started', themeEmoji: r.round > 1 ? '🔄' : '❓', themeLabel: r.round > 1 ? ('Раунд ' + r.round) : 'ШПИОН', chatMode: r.chat_mode, rated: r.rated, mode: r.game_mode || 'classic' });
 for (let i = 0; i < r.players.length; i++) {
   const p = r.players[i];
   const c = r.conns.get(p);
@@ -1458,7 +1546,9 @@ function handleLoginByNick(msg) {
   const acc = findAccountByNick(nick);
   if (!acc) return { ok: false, error: 'Аккаунт не найден' };
   if (acc.passHash !== hashPass(pass)) return { ok: false, error: 'Неверный пароль' };
-  return { ok: true, nickname: acc.nickname, stats: acc.stats || {} };
+  const seasonReset = checkSeasonReset(acc);
+  if (seasonReset) saveAccounts();
+  return { ok: true, nickname: acc.nickname, stats: acc.stats || {}, seasonReset, seasonHistory: acc.seasonHistory || [], coins: acc.coins || 0, avatar: acc.avatar || '🕵️' };
 }
 
 function getAccountStats(nick) {
@@ -1479,6 +1569,34 @@ function isoWeekKey(d) {
 function todayKey(d) {
   const dt = d || new Date();
   return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+}
+
+function seasonKey(d) {
+  const dt = d || new Date();
+  const month = String(dt.getMonth() + 1).padStart(2, '0');
+  return dt.getFullYear() + '-' + month;
+}
+
+const SEASON_RESET_DAY = 15;
+
+function checkSeasonReset(acc) {
+  const now = new Date();
+  const curSeason = seasonKey(now);
+  if (acc.lastSeason === curSeason) return false;
+  if (!acc.lastSeason) { acc.lastSeason = curSeason; return false; }
+  if (now.getDate() < SEASON_RESET_DAY) return false;
+  const prevRating = (acc.stats && acc.stats.rating) || 0;
+  if (!Array.isArray(acc.seasonHistory)) acc.seasonHistory = [];
+  acc.seasonHistory.unshift({ season: acc.lastSeason, rating: prevRating });
+  if (acc.seasonHistory.length > 6) acc.seasonHistory.length = 6;
+  const topReward = prevRating >= 2000 ? 's_gold_season' : prevRating >= 1500 ? 's_silver_season' : prevRating >= 1000 ? 's_bronze_season' : null;
+  if (topReward) {
+    if (!Array.isArray(acc.owned_frames)) acc.owned_frames = [];
+    if (!acc.owned_frames.includes(topReward)) acc.owned_frames.push(topReward);
+  }
+  acc.stats.rating = 100;
+  acc.lastSeason = curSeason;
+  return true;
 }
 
 const QUEST_DEFS = [
@@ -1559,6 +1677,18 @@ function updateAccountStats(nick, gameResult) {
   acc.stats.rating = Math.max(0, acc.stats.rating + delta);
   if (acc.stats.rating < 0) acc.stats.rating = 0;
 
+  // Win streak
+  if (!acc.stats.winStreak) acc.stats.winStreak = 0;
+  if (!acc.stats.maxWinStreak) acc.stats.maxWinStreak = 0;
+  if (won) {
+    acc.stats.winStreak++;
+    if (acc.stats.winStreak > acc.stats.maxWinStreak) acc.stats.maxWinStreak = acc.stats.winStreak;
+    if (acc.stats.winStreak === 3) { acc.coins += 15; }
+    if (acc.stats.winStreak === 5) { acc.coins += 30; }
+  } else {
+    acc.stats.winStreak = 0;
+  }
+
   if (!acc.coins) acc.coins = 0;
   const coinsDelta = won ? 12 : 5;
   acc.coins += coinsDelta;
@@ -1579,6 +1709,7 @@ function updateAccountStats(nick, gameResult) {
 
   // Match history
   if (!Array.isArray(acc.history)) acc.history = [];
+  const opponents = Array.isArray(gameResult.opponents) ? gameResult.opponents : [];
   acc.history.unshift({
     at: new Date().toISOString(),
     word: String(gameResult.word || '').slice(0, 40),
@@ -1587,6 +1718,7 @@ function updateAccountStats(nick, gameResult) {
     delta,
     rating: acc.stats.rating,
     players: parseInt(gameResult.playersCount, 10) || 0,
+    opponents,
   });
   if (acc.history.length > 20) acc.history.length = 20;
 
@@ -1604,7 +1736,7 @@ function updateAccountStats(nick, gameResult) {
   checkAchievements(acc);
   saveAccounts();
 
-  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0, frame: acc.frame || 'default', weeklyRating: acc.weekly ? acc.weekly.rating : 0, won, coins: acc.coins, coinsDelta };
+  return { nickname: nick, delta, rating: acc.stats.rating, calibrated, placementLeft, perfLabel, placing: placementLeft > 0, frame: acc.frame || 'default', weeklyRating: acc.weekly ? acc.weekly.rating : 0, won, coins: acc.coins, coinsDelta, winStreak: acc.stats.winStreak || 0 };
 }
 
 function evalPlayerPerf(r, pid, idx, isSpy, roundsPlayed) {
@@ -1652,7 +1784,8 @@ function finishRatedGame(r) {
     });
     const avgOpp = oppCount ? Math.round(oppSum / oppCount) : undefined;
 
-    const res = updateAccountStats(name, { isSpy, spyWon, perf, avgOpp, word: r.game_word, playersCount: r.players.length });
+    const opponents = r.players.filter(op => op !== pid).map(op => r.names.get(op) || '').filter(Boolean);
+    const res = updateAccountStats(name, { isSpy, spyWon, perf, avgOpp, word: r.game_word, playersCount: r.players.length, opponents });
     if (res) results.push(res);
   });
   if (results.length) broadcast(r, { type: 'rating_results', results });
@@ -1732,6 +1865,9 @@ const FRAMES = {
   s_ice:     { border: '3px solid #a8d8ff', shadow: '0 0 20px rgba(168,216,255,.6)', name: 'Ледяная' },
   s_royal:   { border: '4px double #ffd54f', shadow: '0 0 22px rgba(255,213,79,.75)', name: 'Королевское золото' },
   s_void:    { border: '3px solid #9d4edd', shadow: '0 0 26px rgba(157,78,221,.8)', name: 'Пустота' },
+  s_bronze_season: { border: '3px solid #cd7f32', shadow: '0 0 14px rgba(205,127,50,.5)', name: 'Бронзовый сезон' },
+  s_silver_season: { border: '3px solid #c0c0c0', shadow: '0 0 14px rgba(192,192,192,.5)', name: 'Серебряный сезон' },
+  s_gold_season:   { border: '3px solid #ffd700', shadow: '0 0 18px rgba(255,215,0,.6)', name: 'Золотой сезон' },
 };
 
 const SHOP_FRAMES = [

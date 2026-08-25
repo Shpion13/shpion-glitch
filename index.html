@@ -1255,6 +1255,7 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
       <div class="row" id="lobby-diff-btns">
         <button class="btn theme-btn selected" id="lobby-diff-classic">🕵️ Классика</button>
         <button class="btn theme-btn" id="lobby-diff-similar">🔥 Сложный шпион</button>
+        <button class="btn theme-btn" id="lobby-diff-chaos">🌀 Хаос</button>
       </div>
     </div>
     <button class="btn btn-lg fade-in fade-in-d3" id="lobby-start-btn" style="width:100%" data-i18n="lobby.start">▶ Начать игру</button>
@@ -1297,6 +1298,15 @@ body.gfx-medium .samurai-bg .samurai { filter:drop-shadow(0 4px 8px rgba(0,0,0,.
     <div class="fade-in fade-in-d1" id="online-vote-status" style="font-size:0.82em;color:rgba(var(--neon-rgb),.5);margin-bottom:12px"></div>
     <div class="section fade-in fade-in-d2" id="online-vote-players" style="width:100%;display:flex;flex-direction:column;gap:8px"></div>
     <div class="fade-in fade-in-d2" id="online-vote-wait" style="display:none;font-size:0.85em;color:rgba(var(--neon-rgb),.5);margin-top:12px">Ожидание других игроков...</div>
+    <div class="fade-in fade-in-d3" id="skip-vote-row" style="display:none;margin-top:12px;text-align:center">
+      <button class="btn btn-sm" id="skip-vote-btn" style="background:rgba(255,170,0,.08);border-color:rgba(255,170,0,.3);color:#ffaa00;font-size:.85em">⏭️ Пропустить раунд</button>
+      <div id="skip-vote-info" style="font-size:.78em;color:#888;margin-top:6px"></div>
+    </div>
+    <div class="fade-in fade-in-d2" id="chaos-event-banner" style="display:none;margin-top:12px;padding:14px 18px;background:rgba(157,78,221,.12);border:1px solid rgba(157,78,221,.4);border-radius:14px;text-align:center">
+      <div id="chaos-event-emoji" style="font-size:2em"></div>
+      <div id="chaos-event-name" style="font-size:1.1em;font-weight:800;color:#b388ff;margin-top:4px"></div>
+      <div id="chaos-event-desc" style="font-size:.82em;color:#aaa;margin-top:4px"></div>
+    </div>
   </div>
 
   <!-- Online Results -->
@@ -4965,6 +4975,7 @@ function olHandle(msg) {
       OL.civScore = 0;
       OL.spyScore = 0;
       OL.round = msg.round || 1;
+      OL.mode = msg.mode || 'classic';
       break;
     }
     case 'your_role': {
@@ -5100,6 +5111,43 @@ function olHandle(msg) {
       if (n2 && OL.ws && OL.ws.readyState === 1) olSend({ type: 'get_shop', nickname: n2 });
       break;
     }
+    case 'skip_update': {
+      const info = document.getElementById('skip-vote-info');
+      if (info) info.textContent = '⏭️ Голосов за пропуск: ' + msg.count + '/' + msg.needed;
+      break;
+    }
+    case 'round_skipped': {
+      showToast('⏭️ Раунд пропущен! Раунд ' + msg.round);
+      OL.round = msg.round;
+      break;
+    }
+    case 'chaos_event': {
+      const eb = document.getElementById('chaos-event-banner');
+      if (eb) {
+        eb.style.display = 'block';
+        document.getElementById('chaos-event-emoji').textContent = msg.emoji;
+        document.getElementById('chaos-event-name').textContent = msg.name;
+        document.getElementById('chaos-event-desc').textContent = msg.desc;
+        setTimeout(() => { eb.style.display = 'none'; }, 6000);
+      }
+      break;
+    }
+    case 'chaos_mute': {
+      if (msg.playerId === OL.myId) showToast('🤐 Ты замьючен хаосом!');
+      break;
+    }
+    case 'chaos_hint': {
+      showToast(msg.text);
+      break;
+    }
+    case 'seasons_data': {
+      renderSeasons(msg);
+      break;
+    }
+    case 'avatar_set': {
+      localStorage.setItem('shpion_avatar', msg.avatar);
+      break;
+    }
     case 'room_reconnected': {
       OL.myId = msg.playerId;
       OL.players = msg.players;
@@ -5222,22 +5270,26 @@ document.getElementById('hub-fab-btn').addEventListener('click', () => {
   SFX.click();
   const w = document.getElementById('hub-wrap');
   w.classList.toggle('open');
-  if (w.classList.contains('open')) hubRefresh();
+  if (w.classList.contains('open')) { hubRefresh(); initAvatarPicker(); }
 });
 document.getElementById('hub-close-btn').addEventListener('click', () => {
   SFX.click();
   document.getElementById('hub-wrap').classList.remove('open');
 });
-['hubtab-q','hubtab-t','hubtab-h','hubtab-r','hubtab-s'].forEach((id, ix) => {
+['hubtab-q','hubtab-t','hubtab-h','hubtab-r','hubtab-s','hubtab-se'].forEach((id, ix) => {
   document.getElementById(id).addEventListener('click', () => {
     SFX.click();
     document.querySelectorAll('#hub-wrap .chat-tab').forEach(t => t.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     document.querySelectorAll('#hub-wrap .chat-page').forEach(p => p.classList.remove('active'));
-    document.getElementById(['hubpage-q','hubpage-t','hubpage-h','hubpage-r','hubpage-s'][ix]).classList.add('active');
+    document.getElementById(['hubpage-q','hubpage-t','hubpage-h','hubpage-r','hubpage-s','hubpage-se'][ix]).classList.add('active');
     if (id === 'hubtab-s') {
       const n = hubNick();
       if (n && OL.ws && OL.ws.readyState === 1) olSend({ type: 'get_shop', nickname: n });
+    }
+    if (id === 'hubtab-se') {
+      const n = hubNick();
+      if (n && OL.ws && OL.ws.readyState === 1) olSend({ type: 'get_seasons', nickname: n });
     }
   });
 });
@@ -5254,6 +5306,31 @@ function hubRefresh() {
   }
   olSend({ type: 'get_weekly_top' });
 }
+
+const AVATARS = ['🕵️','😎','🤖','💀','👻','🤡','🎃','🦊','🐱','🐶','🦁','🐸','👑','🔥','💎','🌟','🎭','🎪','🦄','🐙','🧠','❤️','🎯','🎲','🔮'];
+function initAvatarPicker() {
+  const picker = document.getElementById('avatar-picker');
+  if (!picker) return;
+  picker.innerHTML = '';
+  const cur = localStorage.getItem('shpion_avatar') || '🕵️';
+  const display = document.getElementById('hub-avatar-display');
+  if (display) display.textContent = cur;
+  AVATARS.forEach(av => {
+    const btn = document.createElement('div');
+    btn.className = 'avatar-opt' + (av === cur ? ' sel' : '');
+    btn.textContent = av;
+    btn.addEventListener('click', () => {
+      SFX.click();
+      picker.querySelectorAll('.avatar-opt').forEach(b => b.classList.remove('sel'));
+      btn.classList.add('sel');
+      localStorage.setItem('shpion_avatar', av);
+      if (display) display.textContent = av;
+      if (OL.ws && OL.ws.readyState === 1) olSend({ type: 'set_avatar', avatar: av });
+    });
+    picker.appendChild(btn);
+  });
+}
+
 function questDef(defs, id) { return (defs || []).find(d => d.id === id) || { icon: '🎯', name: id, desc: '', goal: 1 }; }
 function renderQuests(msg) {
   const list = document.getElementById('quest-list');
@@ -5314,7 +5391,8 @@ function renderHistory(msg) {
     const it = document.createElement('div');
     it.className = 'hist-item';
     const dt = h.at ? new Date(h.at).toLocaleDateString() : '';
-    it.innerHTML = '<span>' + (h.won ? '✅' : '❌') + ' ' + (h.word || '—') + ' <span style="opacity:.5">(' + (h.role === 'spy' ? '🕵️ шпион' : '👤 мирный') + ')</span></span>' +
+    const oppStr = h.opponents && h.opponents.length ? ' <span style="opacity:.4;font-size:.75em">vs ' + h.opponents.join(', ') + '</span>' : '';
+    it.innerHTML = '<span>' + (h.won ? '✅' : '❌') + ' ' + (h.word || '—') + ' <span style="opacity:.5">(' + (h.role === 'spy' ? '🕵️ шпион' : '👤 мирный') + ')</span>' + oppStr + '</span>' +
       '<span style="display:flex;gap:10px;align-items:center"><span style="opacity:.45">' + dt + '</span><b style="color:' + (h.delta >= 0 ? '#00ff88' : '#ff5577') + '">' + (h.delta >= 0 ? '+' : '') + (h.delta || 0) + '</b><span style="opacity:.7">' + (h.rating || '') + '</span></span>';
     list.appendChild(it);
   });
@@ -5369,6 +5447,25 @@ function renderShop(msg) {
     d.appendChild(info);
     d.appendChild(btn);
     el.appendChild(d);
+  });
+}
+
+function renderSeasons(msg) {
+  const cur = document.getElementById('season-current');
+  if (cur) cur.textContent = 'Текущий сезон: ' + (msg.currentSeason || '—') + ' (сброс ' + (msg.resetDay || 15) + '-го числа)';
+  const hist = document.getElementById('season-history');
+  if (!hist) return;
+  hist.innerHTML = '';
+  if (!msg.history || !msg.history.length) {
+    hist.innerHTML = '<div style="text-align:center;color:#888;font-size:.82em;padding:16px">Пока нет данных — играй и поднимай рейтинг!</div>';
+    return;
+  }
+  msg.history.forEach(s => {
+    const d = document.createElement('div');
+    d.className = 'hist-item';
+    const medal = s.rating >= 2000 ? '🥇' : s.rating >= 1500 ? '🥈' : s.rating >= 1000 ? '🥉' : '—';
+    d.innerHTML = '<span style="color:#888">' + escapeHtml(s.season) + '</span><span style="font-weight:800;color:' + (s.rating >= 1500 ? '#ffd200' : s.rating >= 1000 ? '#c0c0c0' : '#cd7f32') + '">' + medal + ' ' + s.rating + ' ⭐</span>';
+    hist.appendChild(d);
   });
 }
 
@@ -5525,6 +5622,8 @@ function olShowOnlineVote() {
   showScreen('online-vote');
   document.getElementById('online-vote-wait').style.display = 'none';
   document.getElementById('online-vote-status').textContent = t('online.vote_title');
+  const svr = document.getElementById('skip-vote-row');
+  if (svr) { svr.style.display = 'block'; document.getElementById('skip-vote-info').textContent = ''; }
   const list = document.getElementById('online-vote-players');
   list.innerHTML = '';
   OL.players.forEach((p, i) => {
@@ -5538,9 +5637,13 @@ function olShowOnlineVote() {
       olSend({ type: 'vote', voteIndex: i });
       list.innerHTML = '<div style="text-align:center;color:rgba(var(--neon-rgb),.5);padding:12px">' + t('online.waiting') + '</div>';
       document.getElementById('online-vote-wait').style.display = '';
+      if (svr) svr.style.display = 'none';
     });
     list.appendChild(btn);
   });
+  if (OL.mode === 'chaos') {
+    olSend({ type: 'chaos_event' });
+  }
 }
 
 function olShowOnlineTiebreaker(msg) {
@@ -5581,7 +5684,7 @@ function renderMyRating() {
   const cEl = document.getElementById('online-rating-calib');
   const sign = my.delta >= 0 ? '+' : '';
   const col = my.delta >= 0 ? '#00ff88' : '#ff6677';
-  dEl.innerHTML = '<span style="color:' + col + '">' + sign + my.delta + '</span> 📈 Рейтинг: <b>' + my.rating + '</b>' + (my.coinsDelta ? ' &nbsp;🪙 +' + my.coinsDelta : '');
+  dEl.innerHTML = '<span style="color:' + col + '">' + sign + my.delta + '</span> 📈 Рейтинг: <b>' + my.rating + '</b>' + (my.coinsDelta ? ' &nbsp;🪙 +' + my.coinsDelta : '') + (my.winStreak >= 2 ? ' &nbsp;🔥 ×' + my.winStreak : '');
   pEl.textContent = my.perfLabel || '';
   if (my.placing) {
     cEl.textContent = '🎯 Калибровка рейтинга: осталось ' + my.placementLeft + ' ' + plural(my.placementLeft, ['игра', 'игры', 'игр']);
@@ -6212,18 +6315,27 @@ document.getElementById('lobby-start-btn').addEventListener('click', () => {
   });
 });
 
-// Difficulty toggle (classic / hard spy)
+// Difficulty toggle (classic / hard spy / chaos)
 document.getElementById('lobby-diff-classic').addEventListener('click', () => {
   SFX.click();
   OL.diffMode = 'classic';
   document.getElementById('lobby-diff-classic').classList.add('selected');
   document.getElementById('lobby-diff-similar').classList.remove('selected');
+  document.getElementById('lobby-diff-chaos').classList.remove('selected');
 });
 document.getElementById('lobby-diff-similar').addEventListener('click', () => {
   SFX.click();
   OL.diffMode = 'similar';
   document.getElementById('lobby-diff-similar').classList.add('selected');
   document.getElementById('lobby-diff-classic').classList.remove('selected');
+  document.getElementById('lobby-diff-chaos').classList.remove('selected');
+});
+document.getElementById('lobby-diff-chaos').addEventListener('click', () => {
+  SFX.click();
+  OL.diffMode = 'chaos';
+  document.getElementById('lobby-diff-chaos').classList.add('selected');
+  document.getElementById('lobby-diff-classic').classList.remove('selected');
+  document.getElementById('lobby-diff-similar').classList.remove('selected');
 });
 
 document.getElementById('lobby-mode-voice').addEventListener('click', () => {
@@ -6262,6 +6374,13 @@ document.getElementById('lobby-leave-btn').addEventListener('click', () => {
   OL.isHost = false;
   OL.players = [];
   showScreen('setup');
+});
+
+document.getElementById('skip-vote-btn').addEventListener('click', () => {
+  SFX.click();
+  olSend({ type: 'skip_vote' });
+  document.getElementById('skip-vote-btn').disabled = true;
+  document.getElementById('skip-vote-btn').textContent = '✅ Голос засчитан';
 });
 
 document.getElementById('online-ready-btn').addEventListener('click', () => {
@@ -6486,9 +6605,17 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
     <button class="chat-tab" id="hubtab-h">📜 История</button>
     <button class="chat-tab" id="hubtab-r">🤝 Рефы</button>
     <button class="chat-tab" id="hubtab-s">🛒 Магазин</button>
+    <button class="chat-tab" id="hubtab-se">🌍 Сезон</button>
   </div>
   <div class="chat-body">
-    <div class="chat-page active" id="hubpage-q"><div id="quest-list" style="display:flex;flex-direction:column;gap:10px"></div></div>
+    <div class="chat-page active" id="hubpage-q">
+      <div style="text-align:center;margin-bottom:10px">
+        <div id="hub-avatar-display" style="font-size:2.5em;margin-bottom:2px">🕵️</div>
+        <div style="font-size:.78em;color:#888">Выбери аватар</div>
+        <div class="avatar-picker" id="avatar-picker"></div>
+      </div>
+      <div id="quest-list" style="display:flex;flex-direction:column;gap:10px"></div>
+    </div>
     <div class="chat-page" id="hubpage-t"><div id="top-info" style="font-size:.78em;color:#888;margin-bottom:8px"></div><div id="top-list" style="display:flex;flex-direction:column;gap:6px"></div></div>
     <div class="chat-page" id="hubpage-h">
       <svg id="rating-spark" viewBox="0 0 300 60" style="width:100%;height:60px;margin-bottom:10px"></svg>
@@ -6514,6 +6641,20 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
       </div>
       <div id="shop-list" style="display:flex;flex-direction:column;gap:10px"></div>
     </div>
+    <div class="chat-page" id="hubpage-se">
+      <div style="text-align:center;margin-bottom:10px">
+        <div style="font-size:1.1em;font-weight:800;color:var(--neon)">🌍 Сезон</div>
+        <div style="font-size:.78em;color:#888;margin-top:4px">Рейтинг сбрасывается каждое 15-е число месяца</div>
+        <div id="season-current" style="font-size:.82em;color:#ffd200;margin-top:6px"></div>
+      </div>
+      <div id="season-history" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div id="season-rewards" style="margin-top:14px;padding:12px;background:rgba(255,215,0,.06);border:1px solid rgba(255,215,0,.2);border-radius:12px">
+        <div style="font-size:.85em;font-weight:800;color:#ffd200;margin-bottom:6px">🏆 Награды сезона</div>
+        <div style="font-size:.78em;color:#aaa">≥ 1000 — 🥉 Бронзовая рамка</div>
+        <div style="font-size:.78em;color:#aaa">≥ 1500 — 🥈 Серебряная рамка</div>
+        <div style="font-size:.78em;color:#aaa">≥ 2000 — 🥇 Золотая рамка</div>
+      </div>
+    </div>
   </div>
 </div>
 <style>
@@ -6525,6 +6666,21 @@ document.getElementById('online-mic-btn').addEventListener('click', () => {
 .quest-item{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px}
 .top-row{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border-radius:10px;padding:6px 10px;font-size:.85em}
 .tourn-banner-btn{margin-top:6px;padding:6px 14px;border-radius:10px;border:2px solid #ffd200;background:rgba(255,215,0,.2);color:#ffd200;font-weight:800}
+.frame-anim{animation:frPulse 3s ease-in-out infinite}
+@keyframes frPulse{0%,100%{filter:brightness(1) saturate(1)}50%{filter:brightness(1.4) saturate(1.5)}}
+.frame-aurora{background:linear-gradient(135deg,#00c6fb,#005bea,#d500f9)!important;animation:frAurora 4s linear infinite}
+@keyframes frAurora{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+.frame-rose{box-shadow:0 0 12px rgba(255,105,135,.5),inset 0 0 12px rgba(255,105,135,.2)!important;animation:frRose 2s ease-in-out infinite}
+@keyframes frRose{0%,100%{box-shadow:0 0 12px rgba(255,105,135,.5)}50%{box-shadow:0 0 24px rgba(255,105,135,.8)}}
+.frame-ice{box-shadow:0 0 14px rgba(0,212,255,.5),inset 0 0 14px rgba(0,212,255,.2)!important;animation:frIce 3s ease-in-out infinite}
+@keyframes frIce{0%,100%{box-shadow:0 0 14px rgba(0,212,255,.5)}50%{box-shadow:0 0 28px rgba(0,212,255,.9)}}
+.frame-royal{box-shadow:0 0 16px rgba(255,215,0,.6),inset 0 0 16px rgba(255,215,0,.2)!important;animation:frRoyal 2.5s ease-in-out infinite}
+@keyframes frRoyal{0%,100%{box-shadow:0 0 16px rgba(255,215,0,.6)}50%{box-shadow:0 0 32px rgba(255,215,0,1)}}
+.frame-void{box-shadow:0 0 18px rgba(157,0,255,.6),inset 0 0 18px rgba(157,0,255,.3)!important;animation:frVoid 3.5s ease-in-out infinite}
+@keyframes frVoid{0%,100%{box-shadow:0 0 18px rgba(157,0,255,.6);filter:hue-rotate(0deg)}50%{box-shadow:0 0 36px rgba(157,0,255,1);filter:hue-rotate(30deg)}}
+.avatar-picker{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:8px 0}
+.avatar-opt{font-size:1.6em;width:40px;height:40px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(255,255,255,.06);border:2px solid rgba(255,255,255,.12);cursor:pointer;transition:all .15s}
+.avatar-opt:hover,.avatar-opt.sel{border-color:var(--neon);background:rgba(var(--neon-rgb),.15);transform:scale(1.15)}
 </style>
 <!-- Chat & Friends -->
 <button class="ai-fab" id="chat-fab-btn" style="bottom:86px;right:20px;background:linear-gradient(135deg,#00b09b,#96c93d);font-size:1.4em">💬</button>
@@ -6787,6 +6943,9 @@ const ffs = (f.frame && typeof window.getProfileFrameStyle === 'function') ? win
     s_ice:     { border: '3px solid #a8d8ff', shadow: '0 0 20px rgba(168,216,255,.6)', name: 'Ледяная', color: '#a8d8ff' },
     s_royal:   { border: '4px double #ffd54f', shadow: '0 0 22px rgba(255,213,79,.75)', name: 'Королевское золото', color: '#ffd54f' },
     s_void:    { border: '3px solid #9d4edd', shadow: '0 0 26px rgba(157,78,221,.8)', name: 'Пустота', color: '#9d4edd' },
+    s_bronze_season:  { border: '3px solid #cd7f32', shadow: '0 0 14px rgba(205,127,50,.6)', name: 'Бронза сезона', color: '#cd7f32' },
+    s_silver_season:  { border: '3px solid #c0c0c0', shadow: '0 0 16px rgba(192,192,192,.6)', name: 'Серебро сезона', color: '#c0c0c0' },
+    s_gold_season:    { border: '3px solid #ffd700', shadow: '0 0 20px rgba(255,215,0,.7)', name: 'Золото сезона', color: '#ffd700' },
 r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)', name: 'Глобальная Элита', color: '#fff200' },
   };
 
@@ -6897,7 +7056,14 @@ r_ge:      { border: '3px solid #fff200', shadow: '0 0 30px rgba(255,242,0,.7)',
 
   window.getProfileFrameStyle = function(frameId) {
     const f = FRAME_DATA[frameId] || FRAME_DATA.default;
-    return 'border:' + f.border + ';box-shadow:' + f.shadow;
+    let css = 'border:' + f.border + ';box-shadow:' + f.shadow;
+    if (frameId === 's_aurora') css += ';animation:frAurora 4s linear infinite;background:linear-gradient(135deg,#00c6fb,#005bea,#d500f9)';
+    else if (frameId === 's_rose') css += ';animation:frRose 2s ease-in-out infinite';
+    else if (frameId === 's_ice') css += ';animation:frIce 3s ease-in-out infinite';
+    else if (frameId === 's_royal') css += ';animation:frRoyal 2.5s ease-in-out infinite';
+    else if (frameId === 's_void') css += ';animation:frVoid 3.5s ease-in-out infinite';
+    else if (['s_bronze_season','s_silver_season','s_gold_season'].includes(frameId)) css += ';animation:frPulse 3s ease-in-out infinite';
+    return css;
   };
   window.getProfileFrameName = function(frameId) {
     return (FRAME_DATA[frameId] || FRAME_DATA.default).name;
